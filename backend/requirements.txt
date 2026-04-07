@@ -1,0 +1,10 @@
+Django==5.1.0
+djangorestframework==3.14.0
+django-cors-headers==4.3.1
+channels==4.1.0
+daphne==4.1.2
+python-dotenv==1.0.0
+opencv-python==4.13.0.92
+mediapipe==0.10.33
+numpy>=1.26.0
+django-filter==23.5
