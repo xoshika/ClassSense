@@ -12,5 +12,6 @@ urlpatterns = [
     path("gestures/", views.gesture_logs),
     path("alerts/", views.alerts_list),
     path("alerts/<int:pk>/respond/", views.alert_respond),
-    path("activity/", views.class_activity),
+    path("activity/logs/", views.class_activity_logs),
+    path("setup/preferences/", views.class_setup_preferences),
 ]

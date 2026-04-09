@@ -79,3 +79,12 @@ class Alert(models.Model):
 
     def __str__(self):
         return f"Alert: {self.gesture} - Chair {self.chair_rank}"
+
+
+class UserPreference(models.Model):
+    user = models.OneToOneField('auth.User', on_delete=models.CASCADE, null=True, blank=True)
+    num_chairs = models.IntegerField(default=12)
+    subject_name = models.CharField(max_length=200, default='')
+    teacher_name = models.CharField(max_length=200, default='')
+    room_number = models.CharField(max_length=100, default='')
+    updated_at = models.DateTimeField(auto_now=True)

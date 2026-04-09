@@ -1,74 +1,70 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect } from 'react'
 
-export default function ClassSetup() {
-  const [subjectName, setSubjectName] = useState("MACHINE LEARNING");
-  const [roomNumber, setRoomNumber]   = useState("Lab 2 CCS");
-  const [teacherName, setTeacherName] = useState("JOHN AUGUSTUS");
-  const [numChairs, setNumChairs]     = useState(6);
-  const [studentNames, setStudentNames] = useState(
-    Array.from({ length: 6 }, (_, i) => `Student ${i + 1}`)
-  );
-  const [liveDateTime, setLiveDateTime] = useState('');
+export default function ClassSetup({ setupPrefs, updateSetupPrefs }) {
+  const [subjectName, setSubjectName] = useState('MACHINE LEARNING')
+  const [roomNumber, setRoomNumber] = useState('Lab 2 CCS')
+  const [teacherName, setTeacherName] = useState('JOHN AUGUSTUS')
+  const [numChairs, setNumChairs] = useState(6)
+  const [studentNames, setStudentNames] = useState([])
+  const [liveDateTime, setLiveDateTime] = useState('')
 
-  const [savedSubject,  setSavedSubject]  = useState("MACHINE LEARNING");
-  const [savedRoom,     setSavedRoom]     = useState("Lab 2 CCS");
-  const [savedTeacher,  setSavedTeacher]  = useState("JOHN AUGUSTUS");
-  const [savedChairs,   setSavedChairs]   = useState(6);
-  const [savedStudents, setSavedStudents] = useState(
-    Array.from({ length: 6 }, (_, i) => `Student ${i + 1}`)
-  );
+  useEffect(() => {
+    if (setupPrefs) {
+      setSubjectName(setupPrefs.subject_name || 'MACHINE LEARNING')
+      setRoomNumber(setupPrefs.room_number || 'Lab 2 CCS')
+      setTeacherName(setupPrefs.teacher_name || 'JOHN AUGUSTUS')
+      setNumChairs(setupPrefs.num_chairs || 6)
+      const names = setupPrefs.student_names || Array.from({ length: setupPrefs.num_chairs || 6 }, (_, i) => `Student ${i + 1}`)
+      setStudentNames(names)
+    }
+  }, [setupPrefs])
 
   useEffect(() => {
     const tick = () => {
-      const now  = new Date();
-      const date = now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-      const time = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      setLiveDateTime(`${date} | ${time}`);
-    };
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, []);
+      const now = new Date()
+      const date = now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+      const time = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      setLiveDateTime(`${date} | ${time}`)
+    }
+    tick()
+    const id = setInterval(tick, 1000)
+    return () => clearInterval(id)
+  }, [])
 
   const handleAddChair = () => {
-    const next = numChairs + 1;
-    setNumChairs(next);
-    setStudentNames(prev => [...prev, `Student ${next}`]);
-  };
+    const next = numChairs + 1
+    setNumChairs(next)
+    setStudentNames(prev => [...prev, `Student ${next}`])
+  }
 
   const handleRemoveChair = () => {
-    if (numChairs <= 1) return;
-    setNumChairs(prev => prev - 1);
-    setStudentNames(prev => prev.slice(0, -1));
-  };
+    if (numChairs <= 1) return
+    setNumChairs(prev => prev - 1)
+    setStudentNames(prev => prev.slice(0, -1))
+  }
 
   const handleStudentChange = (index, value) => {
-    const updated = [...studentNames];
-    updated[index] = value;
-    setStudentNames(updated);
-  };
+    const updated = [...studentNames]
+    updated[index] = value
+    setStudentNames(updated)
+  }
 
   const handleSave = () => {
-    setSavedSubject(subjectName);
-    setSavedRoom(roomNumber);
-    setSavedTeacher(teacherName);
-    setSavedChairs(numChairs);
-    setSavedStudents([...studentNames]);
-    alert("Changes saved successfully!");
-  };
-
-  const handleCancel = () => {
-    setSubjectName(savedSubject);
-    setRoomNumber(savedRoom);
-    setTeacherName(savedTeacher);
-    setNumChairs(savedChairs);
-    setStudentNames([...savedStudents]);
-  };
+    if (updateSetupPrefs) {
+      updateSetupPrefs({
+        num_chairs: numChairs,
+        subject_name: subjectName,
+        teacher_name: teacherName,
+        room_number: roomNumber,
+        student_names: studentNames
+      })
+    }
+    alert('Changes saved successfully!')
+  }
 
   return (
     <main className="flex-1 overflow-auto p-6 bg-gray-50">
       <div className="bg-white rounded-lg border border-gray-200 shadow p-6 hover:shadow-md transition-all">
-
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-base font-bold text-gray-800">Class Setup</h2>
           <span className="text-xs text-gray-500 tabular-nums bg-gray-50 border border-gray-200 rounded-full px-3 py-1">
@@ -163,20 +159,13 @@ export default function ClassSetup() {
 
         <div className="flex gap-3 justify-end">
           <button
-            onClick={handleCancel}
-            className="bg-gray-500 hover:bg-gray-600 text-white font-bold px-6 py-2 rounded-lg transition-colors shadow-md"
-          >
-            Cancel
-          </button>
-          <button
             onClick={handleSave}
             className="bg-blue-500 hover:bg-blue-600 text-white font-bold px-6 py-2 rounded-lg transition-colors shadow-md"
           >
             Save Changes
           </button>
         </div>
-
       </div>
     </main>
-  );
+  )
 }

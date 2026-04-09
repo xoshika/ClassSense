@@ -1,8 +1,3 @@
-"""
-ClassSense Gesture Engine
-Python 3.13 + TensorFlow 2.20.0 + MediaPipe 0.10.33
-"""
-
 import json
 import os
 import cv2
