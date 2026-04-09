@@ -127,15 +127,16 @@ export const useGestureStream = (sessionId, numSeats = 20) => {
         send({
           type: "config",
           num_seats: numSeats,
+          session_id: sessionId,
         });
       },
       onMessage: (data) => {
         if (data.type === "gesture_detected") {
-          const gesture = data.data;
-          setGestures((prev) => [gesture, ...prev.slice(0, 49)]);
+          const gestureData = data.gestures?.[0] || data.data || data;
+          setGestures((prev) => [gestureData, ...prev.slice(0, 49)]);
           setStats((prev) => ({
             ...prev,
-            [gesture.gesture]: (prev[gesture.gesture] || 0) + 1,
+            [gestureData.gesture]: (prev[gestureData.gesture] || 0) + 1,
           }));
         }
       },
@@ -148,10 +149,11 @@ export const useGestureStream = (sessionId, numSeats = 20) => {
       if (!send) return;
       send({
         type: "frame",
-        image_data: imageData,
+        session_id: sessionId,
+        frame: imageData,
       });
     },
-    [send]
+    [send, sessionId]
   );
 
   return {

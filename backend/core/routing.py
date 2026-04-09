@@ -1,6 +1,6 @@
-from django.urls import re_path
+﻿from django.urls import re_path
 from .consumers import GestureConsumer
 
 websocket_urlpatterns = [
-    re_path(r"ws/gesture/$", GestureConsumer.as_asgi()),
+    re_path(r'ws/gesture/.*$', GestureConsumer.as_asgi()),
 ]
