@@ -7,12 +7,8 @@ export default function ClassSetupForm({ onStartClass, onCancel, selectedDate, o
   const [liveDateTime, setLiveDateTime] = useState('')
 
   const [classSetup, setClassSetup] = useState({
-    subjectName: '',
-    teacherName: '',
-    roomNumber: '',
-    activityMode: 'Lecture',
-    numChairs: 12,
-    studentNames: {}
+    subjectName: '', teacherName: '', roomNumber: '',
+    activityMode: 'Lecture', numChairs: 12, studentNames: {}
   })
 
   useEffect(() => {
@@ -43,190 +39,279 @@ export default function ClassSetupForm({ onStartClass, onCancel, selectedDate, o
     return () => clearInterval(id)
   }, [])
 
-  const handleInputChange = (field, value) => {
-    setClassSetup(prev => ({ ...prev, [field]: value }))
-  }
+  const handleInputChange = (field, value) => setClassSetup(prev => ({ ...prev, [field]: value }))
+  const handleActivityMode = (mode) => setClassSetup(prev => ({ ...prev, activityMode: mode }))
 
-  const handleActivityMode = (mode) => {
-    setClassSetup(prev => ({ ...prev, activityMode: mode }))
-  }
+  const handleAddChair = () => setClassSetup(prev => ({ ...prev, numChairs: Math.min(prev.numChairs + 1, 50) }))
+  const handleRemoveChair = () => setClassSetup(prev => {
+    const next = Math.max(prev.numChairs - 1, 1)
+    const updatedNames = { ...prev.studentNames }
+    delete updatedNames[`student_${prev.numChairs - 1}`]
+    return { ...prev, numChairs: next, studentNames: updatedNames }
+  })
 
-  const handleAddChair = () => {
-    setClassSetup(prev => ({
-      ...prev,
-      numChairs: Math.min(prev.numChairs + 1, 50),
-    }))
-  }
-
-  const handleRemoveChair = () => {
-    setClassSetup(prev => {
-      const next = Math.max(prev.numChairs - 1, 1)
-      const updatedNames = { ...prev.studentNames }
-      delete updatedNames[`student_${prev.numChairs - 1}`]
-      return { ...prev, numChairs: next, studentNames: updatedNames }
-    })
-  }
-
-  const handleStudentNameChange = (key, value) => {
-    setClassSetup(prev => ({
-      ...prev,
-      studentNames: { ...prev.studentNames, [key]: value },
-    }))
-  }
+  const handleStudentNameChange = (key, value) => setClassSetup(prev => ({
+    ...prev, studentNames: { ...prev.studentNames, [key]: value }
+  }))
 
   const handleStart = () => {
     const namesArray = []
     for (let i = 0; i < classSetup.numChairs; i++) {
       namesArray.push(classSetup.studentNames[`student_${i}`] || `Student ${i + 1}`)
     }
-    updateSetupPrefs({
-      num_chairs: classSetup.numChairs,
-      subject_name: classSetup.subjectName,
-      teacher_name: classSetup.teacherName,
-      room_number: classSetup.roomNumber,
-      student_names: namesArray
-    })
+    updateSetupPrefs({ num_chairs: classSetup.numChairs, subject_name: classSetup.subjectName, teacher_name: classSetup.teacherName, room_number: classSetup.roomNumber, student_names: namesArray })
     onStartClass(classSetup)
+  }
+
+  const MODE_CONFIG = {
+    Lecture: { color: '#3b82f6', bg: 'rgba(59,130,246,0.12)', border: 'rgba(59,130,246,0.3)', activeBg: 'linear-gradient(135deg,#3b82f6,#2563eb)' },
+    Quiz:    { color: '#f59e0b', bg: 'rgba(245,158,11,0.12)', border: 'rgba(245,158,11,0.3)', activeBg: 'linear-gradient(135deg,#f59e0b,#d97706)' },
+    Exam:    { color: '#ef4444', bg: 'rgba(239,68,68,0.12)',  border: 'rgba(239,68,68,0.3)',  activeBg: 'linear-gradient(135deg,#ef4444,#dc2626)' },
   }
 
   return (
     <>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap');
+        .csf-root { flex: 1; display: flex; flex-direction: column; overflow: hidden; font-family: 'DM Sans','Segoe UI',sans-serif; }
+        .csf-topbar {
+          background: rgba(15,23,42,0.97); backdrop-filter: blur(20px);
+          padding: 0 28px; height: 60px;
+          display: flex; align-items: center; justify-content: space-between;
+          flex-shrink: 0; border-bottom: 1px solid rgba(255,255,255,0.06);
+          box-shadow: 0 2px 16px rgba(0,0,0,0.2);
+        }
+        .csf-topbar-left { display: flex; align-items: center; gap: 10px; }
+        .csf-topbar-title { font-size: 18px; font-weight: 700; color: #f0f9ff; letter-spacing: -0.4px; }
+        .csf-datetime-btn {
+          display: flex; align-items: center; gap: 7px;
+          background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.1);
+          border-radius: 8px; padding: 6px 12px; cursor: pointer;
+          color: rgba(186,210,235,0.9); font-size: 12px; font-weight: 500;
+          font-family: 'DM Sans','Segoe UI',sans-serif; transition: all 0.18s ease;
+        }
+        .csf-datetime-btn:hover { background: rgba(59,130,246,0.15); border-color: rgba(59,130,246,0.3); }
+        .csf-avatar { width: 34px; height: 34px; background: linear-gradient(135deg,#3b82f6,#1d4ed8); border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(59,130,246,0.3); }
+        .csf-body { flex: 1; overflow: auto; padding: 28px; background: #f1f5f9; }
+        .csf-card {
+          max-width: 860px; margin: 0 auto;
+          background: rgba(255,255,255,0.7);
+          backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+          border: 1px solid rgba(255,255,255,0.6);
+          border-radius: 20px;
+          box-shadow: 0 8px 40px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.9);
+          padding: 32px;
+        }
+        .csf-card-title { font-size: 17px; font-weight: 700; color: #0f172a; letter-spacing: -0.4px; margin-bottom: 28px; }
+        .csf-section-title {
+          font-size: 11px; font-weight: 700; color: #64748b;
+          letter-spacing: 0.8px; text-transform: uppercase;
+          margin-bottom: 14px; margin-top: 24px;
+          display: flex; align-items: center; gap: 8px;
+        }
+        .csf-section-title::after {
+          content: ''; flex: 1; height: 1px;
+          background: rgba(0,0,0,0.07);
+        }
+        .csf-input-group { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; }
+        .csf-input-group-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        .csf-field { display: flex; flex-direction: column; gap: 6px; }
+        .csf-label { font-size: 11px; font-weight: 700; color: #64748b; letter-spacing: 0.4px; text-transform: uppercase; }
+        .csf-input {
+          padding: 10px 14px;
+          background: rgba(255,255,255,0.6);
+          backdrop-filter: blur(8px);
+          border: 1px solid rgba(0,0,0,0.09);
+          border-radius: 10px;
+          font-size: 13px; color: #0f172a;
+          font-family: 'DM Sans','Segoe UI',sans-serif;
+          transition: all 0.18s ease; outline: none;
+          box-shadow: inset 0 1px 3px rgba(0,0,0,0.04);
+        }
+        .csf-input::placeholder { color: rgba(148,163,184,0.7); }
+        .csf-input:focus {
+          border-color: rgba(59,130,246,0.5);
+          background: rgba(255,255,255,0.85);
+          box-shadow: 0 0 0 3px rgba(59,130,246,0.1), inset 0 1px 3px rgba(0,0,0,0.03);
+        }
+        .csf-mode-btns { display: flex; gap: 10px; }
+        .csf-mode-btn {
+          padding: 9px 22px; border-radius: 10px;
+          font-size: 13px; font-weight: 600;
+          cursor: pointer; transition: all 0.18s ease;
+          font-family: 'DM Sans','Segoe UI',sans-serif;
+          border: 1px solid transparent;
+        }
+        .csf-mode-btn.inactive {
+          background: rgba(255,255,255,0.6);
+          backdrop-filter: blur(8px);
+          border-color: rgba(0,0,0,0.09);
+          color: #475569;
+          box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+        }
+        .csf-mode-btn.inactive:hover { background: rgba(255,255,255,0.85); transform: translateY(-1px); }
+        .csf-chair-row { display: flex; align-items: center; gap: 14px; }
+        .csf-chair-label { font-size: 13px; color: #475569; font-weight: 500; }
+        .csf-counter { display: flex; align-items: center; gap: 10px; }
+        .csf-counter-btn {
+          width: 34px; height: 34px; border-radius: 9px;
+          background: rgba(255,255,255,0.6); backdrop-filter: blur(8px);
+          border: 1px solid rgba(0,0,0,0.09); color: #334155;
+          font-size: 18px; font-weight: 700; cursor: pointer;
+          display: flex; align-items: center; justify-content: center;
+          transition: all 0.18s ease; box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+        }
+        .csf-counter-btn:hover:not(:disabled) { background: rgba(255,255,255,0.85); transform: translateY(-1px); }
+        .csf-counter-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+        .csf-counter-val { font-size: 16px; font-weight: 700; color: #0f172a; min-width: 28px; text-align: center; }
+        .csf-student-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; }
+        .csf-student-label { font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 5px; }
+        .csf-divider { height: 1px; background: rgba(0,0,0,0.06); margin: 22px 0; }
+        .csf-actions { display: flex; gap: 10px; }
+        .csf-btn-cancel {
+          display: flex; align-items: center; gap: 7px;
+          padding: 11px 22px; border-radius: 10px;
+          font-size: 13px; font-weight: 700;
+          background: rgba(239,68,68,0.1); backdrop-filter: blur(8px);
+          border: 1px solid rgba(239,68,68,0.25); color: #ef4444;
+          cursor: pointer; font-family: 'DM Sans','Segoe UI',sans-serif;
+          transition: all 0.18s ease;
+        }
+        .csf-btn-cancel:hover { background: rgba(239,68,68,0.18); transform: translateY(-1px); }
+        .csf-btn-start {
+          display: flex; align-items: center; gap: 7px;
+          padding: 11px 22px; border-radius: 10px;
+          font-size: 13px; font-weight: 700;
+          background: linear-gradient(135deg,#3b82f6,#2563eb);
+          border: none; color: white;
+          cursor: pointer; font-family: 'DM Sans','Segoe UI',sans-serif;
+          transition: all 0.18s ease;
+          box-shadow: 0 4px 14px rgba(59,130,246,0.35);
+        }
+        .csf-btn-start:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(59,130,246,0.45); }
+        .csf-hint { font-size: 11px; color: #94a3b8; margin-bottom: 12px; }
+      `}</style>
+
       {showCalendar && createPortal(
-        <DateCalendar
-          selectedDate={selectedDate}
-          onDateSelect={(newDate) => { onDateSelect(newDate); setShowCalendar(false) }}
-          onClose={() => setShowCalendar(false)}
-        />,
+        <DateCalendar selectedDate={selectedDate} onDateSelect={(d) => { onDateSelect(d); setShowCalendar(false) }} onClose={() => setShowCalendar(false)} />,
         document.body
       )}
 
-      <header className="bg-blue-500 px-6 py-4 flex items-center justify-between gap-6 flex-shrink-0 shadow-md">
-        <div className="flex items-center gap-3">
-          <h1 className="text-white text-2xl font-bold">Start Class</h1>
-        </div>
-        <div className="ml-auto flex items-center gap-3">
-          <button
-            onClick={() => setShowCalendar(!showCalendar)}
-            className="flex items-center gap-1.5 bg-white/20 border border-white/40 rounded px-2.5 py-1 hover:bg-white/30 transition-colors cursor-pointer"
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
-            </svg>
-            <span className="text-white text-[11px] font-medium tabular-nums">{liveDateTime}</span>
-          </button>
-          <div className="w-8 h-8 bg-white/30 rounded-full flex items-center justify-center">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="white" stroke="white" strokeWidth="1.5">
-              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
-            </svg>
+      <div className="csf-root">
+        <header className="csf-topbar">
+          <div className="csf-topbar-left">
+            <div style={{ width: 4, height: 20, background: 'linear-gradient(180deg,#3b82f6,#60a5fa)', borderRadius: 4 }} />
+            <span className="csf-topbar-title">Start Class</span>
           </div>
-        </div>
-      </header>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button className="csf-datetime-btn" onClick={() => setShowCalendar(!showCalendar)}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+              </svg>
+              {liveDateTime}
+            </button>
+            <div className="csf-avatar">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="white" stroke="white" strokeWidth="1.5">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+              </svg>
+            </div>
+          </div>
+        </header>
 
-      <main className="flex-1 overflow-auto p-6 bg-gray-50">
-        <div className="max-w-4xl mx-auto bg-white rounded-lg border border-gray-200 shadow p-6">
-          <h2 className="text-lg font-bold text-gray-800 mb-6">Setup Your Class Activity</h2>
+        <main className="csf-body">
+          <div className="csf-card">
+            <div className="csf-card-title">Setup Your Class Activity</div>
 
-          <div className="mb-8">
-            <h3 className="text-sm font-semibold text-gray-700 mb-4">Class Information</h3>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="csf-section-title">Class Information</div>
+            <div className="csf-input-group">
               {[
                 { label: 'Subject Name', field: 'subjectName', placeholder: 'Machine Learning 101' },
                 { label: 'Teacher Name', field: 'teacherName', placeholder: 'Prof. Santos' },
                 { label: 'Room Number', field: 'roomNumber', placeholder: 'Room 104' },
               ].map(({ label, field, placeholder }) => (
-                <div key={field}>
-                  <label className="text-xs text-gray-600 font-medium block mb-1">{label}</label>
-                  <input
-                    type="text"
-                    placeholder={placeholder}
-                    value={classSetup[field]}
-                    onChange={e => handleInputChange(field, e.target.value)}
-                    className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+                <div key={field} className="csf-field">
+                  <label className="csf-label">{label}</label>
+                  <input type="text" placeholder={placeholder} value={classSetup[field]} onChange={e => handleInputChange(field, e.target.value)} className="csf-input" />
                 </div>
               ))}
             </div>
-          </div>
 
-          <div className="mb-8">
-            <h3 className="text-sm font-semibold text-gray-700 mb-4">Activity Mode</h3>
-            <div className="flex gap-3">
-              {['Lecture', 'Quiz', 'Exam'].map(mode => (
-                <button
-                  key={mode}
-                  onClick={() => handleActivityMode(mode)}
-                  className={`px-6 py-2 rounded-lg text-sm font-medium transition-all ${classSetup.activityMode === mode ? 'bg-blue-500 text-white shadow-md' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
-                >
-                  {mode}
-                </button>
-              ))}
+            <div className="csf-divider" />
+            <div className="csf-section-title">Activity Mode</div>
+            <div className="csf-mode-btns">
+              {['Lecture', 'Quiz', 'Exam'].map(mode => {
+                const cfg = MODE_CONFIG[mode]
+                const isActive = classSetup.activityMode === mode
+                return (
+                  <button
+                    key={mode}
+                    onClick={() => handleActivityMode(mode)}
+                    className="csf-mode-btn"
+                    style={isActive ? {
+                      background: cfg.activeBg,
+                      color: 'white',
+                      border: 'none',
+                      boxShadow: `0 4px 14px ${cfg.color}40`,
+                    } : {}}
+                  >
+                    {mode === 'Lecture' && '📖 '}
+                    {mode === 'Quiz' && '📝 '}
+                    {mode === 'Exam' && '🔒 '}
+                    {isActive ? '' : ''}
+                    {mode}
+                  </button>
+                )
+              })}
             </div>
-          </div>
 
-          <div className="mb-8">
-            <h3 className="text-sm font-semibold text-gray-700 mb-4">Chair Ranking Setup</h3>
-            <div className="flex items-center gap-3">
-              <span className="text-xs text-gray-600 font-medium">Number of Chairs / Students</span>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleRemoveChair}
-                  disabled={classSetup.numChairs <= 1}
-                  className="w-9 h-9 rounded-lg border border-gray-300 bg-white text-gray-700 text-lg font-bold hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center justify-center"
-                >
-                  −
-                </button>
-                <span className="w-10 text-center text-base font-bold text-gray-800 tabular-nums">{classSetup.numChairs}</span>
-                <button
-                  onClick={handleAddChair}
-                  disabled={classSetup.numChairs >= 50}
-                  className="w-9 h-9 rounded-lg border border-gray-300 bg-white text-gray-700 text-lg font-bold hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center justify-center"
-                >
-                  +
-                </button>
+            <div className="csf-divider" />
+            <div className="csf-section-title">Chair Ranking Setup</div>
+            <div className="csf-chair-row">
+              <span className="csf-chair-label">Number of Chairs / Students</span>
+              <div className="csf-counter">
+                <button className="csf-counter-btn" onClick={handleRemoveChair} disabled={classSetup.numChairs <= 1}>−</button>
+                <span className="csf-counter-val">{classSetup.numChairs}</span>
+                <button className="csf-counter-btn" onClick={handleAddChair} disabled={classSetup.numChairs >= 50}>+</button>
               </div>
             </div>
-          </div>
 
-          <div className="mb-8">
-            <h3 className="text-sm font-semibold text-gray-700 mb-1">Student Names (optional)</h3>
-            <p className="text-xs text-gray-400 mb-4">
-              {classSetup.numChairs} chair{classSetup.numChairs !== 1 ? 's' : ''} — adjust with + / − above
-            </p>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="csf-divider" />
+            <div className="csf-section-title">Student Names (Optional)</div>
+            <div className="csf-hint">{classSetup.numChairs} chair{classSetup.numChairs !== 1 ? 's' : ''} — adjust with + / − above</div>
+            <div className="csf-student-grid">
               {Array.from({ length: Math.min(classSetup.numChairs, 12) }, (_, i) => (
                 <div key={i}>
-                  <label className="text-xs text-gray-600 font-medium block mb-1">Chair Rank {i + 1}</label>
+                  <div className="csf-student-label">Chair Rank {i + 1}</div>
                   <input
                     type="text"
                     placeholder={`Student ${i + 1}`}
                     value={classSetup.studentNames[`student_${i}`] || ''}
                     onChange={e => handleStudentNameChange(`student_${i}`, e.target.value)}
-                    className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="csf-input"
+                    style={{ fontSize: 12 }}
                   />
                 </div>
               ))}
             </div>
-          </div>
 
-          <div className="flex gap-3">
-            <button
-              onClick={onCancel}
-              className="bg-red-500 hover:bg-red-600 text-white font-bold px-6 py-2 rounded-lg transition-colors shadow-md flex items-center gap-2"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
-              Cancel
-            </button>
-            <button
-              onClick={handleStart}
-              className="bg-blue-500 hover:bg-blue-600 text-white font-bold px-6 py-2 rounded-lg transition-colors shadow-md"
-            >
-              Start Class Activity
-            </button>
+            <div className="csf-divider" />
+            <div className="csf-actions">
+              <button className="csf-btn-cancel" onClick={onCancel}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+                Cancel
+              </button>
+              <button className="csf-btn-start" onClick={handleStart}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="5 3 19 12 5 21 5 3"/>
+                </svg>
+                Start Class Activity
+              </button>
+            </div>
           </div>
-        </div>
-      </main>
+        </main>
+      </div>
     </>
   )
 }

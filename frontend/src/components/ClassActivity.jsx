@@ -5,6 +5,20 @@ const API_BASE = 'http://localhost:8000/api'
 const filterOptions = ['All', 'Hand Raise', 'Peace Sign', 'Writing', 'Head Moving']
 const sortOptions = ['Newest', 'Oldest', 'By Rank', 'By Student', 'By Gesture']
 
+const GESTURE_COLORS = {
+  raised_hand: '#10b981',
+  hand_raise: '#10b981',
+  peace_sign: '#3b82f6',
+  writing: '#a855f7',
+  head_moving: '#f59e0b',
+  default: '#64748b',
+}
+
+function getGestureColor(gesture) {
+  const key = gesture?.toLowerCase().replace(/\s/g, '_')
+  return GESTURE_COLORS[key] || GESTURE_COLORS.default
+}
+
 export default function ClassActivity({ selectedDate }) {
   const [logs, setLogs] = useState([])
   const [filter, setFilter] = useState('All')
@@ -38,98 +52,272 @@ export default function ClassActivity({ selectedDate }) {
 
   return (
     <>
-      <div className="bg-white px-6 py-4 flex items-center gap-8 border-b-2 border-gray-200 shrink-0 shadow-sm">
-        <div className="flex items-center gap-4">
-          <span className="text-sm text-gray-700 font-semibold">Filter:</span>
-          <div className="relative">
-            <button
-              onClick={() => setFilterOpen(!filterOpen)}
-              className="bg-sky-500 hover:bg-sky-600 text-white text-sm px-5 py-2.5 rounded-lg flex items-center gap-2 transition-all shadow-md hover:shadow-lg"
-            >
-              <span className="font-medium">{filter}</span>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                <path d="M6 9l6 6 6-6" />
-              </svg>
-            </button>
-            {filterOpen && (
-              <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded shadow-lg z-10 min-w-32">
-                {filterOptions.map(option => (
-                  <button
-                    key={option}
-                    onClick={() => { setFilter(option); setFilterOpen(false) }}
-                    className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-100 ${filter === option ? 'bg-sky-100 text-sky-700 font-medium' : 'text-gray-700'}`}
-                  >
-                    {option}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
+      <style>{`
+        .ca-root {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+          font-family: 'DM Sans', 'Segoe UI', sans-serif;
+        }
+        .ca-toolbar {
+          background: rgba(15,23,42,0.96);
+          backdrop-filter: blur(20px);
+          padding: 12px 28px;
+          display: flex;
+          align-items: center;
+          gap: 24px;
+          flex-shrink: 0;
+          border-bottom: 1px solid rgba(255,255,255,0.06);
+        }
+        .ca-toolbar-label {
+          font-size: 11px;
+          font-weight: 600;
+          color: rgba(148,163,184,0.7);
+          letter-spacing: 0.8px;
+          text-transform: uppercase;
+        }
+        .ca-dropdown-wrap { position: relative; }
+        .ca-dropdown-btn {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          background: rgba(255,255,255,0.07);
+          border: 1px solid rgba(255,255,255,0.12);
+          border-radius: 8px;
+          padding: 7px 14px;
+          color: #e0f2fe;
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.18s ease;
+          font-family: 'DM Sans', 'Segoe UI', sans-serif;
+          min-width: 110px;
+          justify-content: space-between;
+        }
+        .ca-dropdown-btn:hover {
+          background: rgba(59,130,246,0.15);
+          border-color: rgba(59,130,246,0.3);
+        }
+        .ca-dropdown-menu {
+          position: absolute;
+          top: calc(100% + 6px);
+          left: 0;
+          background: #1e293b;
+          border: 1px solid rgba(255,255,255,0.1);
+          border-radius: 10px;
+          box-shadow: 0 16px 40px rgba(0,0,0,0.4);
+          z-index: 100;
+          min-width: 140px;
+          overflow: hidden;
+          padding: 4px;
+        }
+        .ca-dropdown-item {
+          width: 100%;
+          text-align: left;
+          padding: 8px 12px;
+          font-size: 13px;
+          color: rgba(186,210,235,0.85);
+          cursor: pointer;
+          border: none;
+          background: none;
+          border-radius: 7px;
+          font-family: 'DM Sans', 'Segoe UI', sans-serif;
+          transition: all 0.15s ease;
+        }
+        .ca-dropdown-item:hover { background: rgba(59,130,246,0.15); color: #e0f2fe; }
+        .ca-dropdown-item.active { background: rgba(59,130,246,0.2); color: #60a5fa; font-weight: 600; }
+        .ca-body {
+          flex: 1;
+          overflow: auto;
+          padding: 24px 28px;
+          background: #f1f5f9;
+        }
+        .ca-table-card {
+          background: white;
+          border-radius: 16px;
+          border: 1px solid rgba(0,0,0,0.05);
+          box-shadow: 0 2px 12px rgba(0,0,0,0.04);
+          overflow: hidden;
+        }
+        .ca-table-header-row {
+          padding: 16px 20px 14px;
+          border-bottom: 1px solid rgba(0,0,0,0.06);
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+        }
+        .ca-table-title {
+          font-size: 14px;
+          font-weight: 700;
+          color: #0f172a;
+          letter-spacing: -0.2px;
+        }
+        .ca-table-count {
+          font-size: 11px;
+          color: #94a3b8;
+          background: #f1f5f9;
+          padding: 3px 10px;
+          border-radius: 20px;
+          font-weight: 600;
+        }
+        .ca-table-cols {
+          display: grid;
+          grid-template-columns: 1fr 1fr 1.5fr 0.8fr 1fr;
+          padding: 10px 20px;
+          background: #f8fafc;
+          border-bottom: 1px solid rgba(0,0,0,0.05);
+        }
+        .ca-col-label {
+          font-size: 10px;
+          font-weight: 700;
+          color: #94a3b8;
+          letter-spacing: 0.8px;
+          text-transform: uppercase;
+        }
+        .ca-table-body { max-height: 520px; overflow-y: auto; }
+        .ca-table-row {
+          display: grid;
+          grid-template-columns: 1fr 1fr 1.5fr 0.8fr 1fr;
+          padding: 12px 20px;
+          border-bottom: 1px solid rgba(0,0,0,0.04);
+          transition: background 0.15s ease;
+          align-items: center;
+        }
+        .ca-table-row:hover { background: #f8fafc; }
+        .ca-table-row:last-child { border-bottom: none; }
+        .ca-cell { font-size: 13px; color: #475569; }
+        .ca-cell-time { font-size: 12px; color: #64748b; font-variant-numeric: tabular-nums; }
+        .ca-gesture-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 12px;
+          font-weight: 600;
+        }
+        .ca-gesture-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          flex-shrink: 0;
+        }
+        .ca-rank-badge {
+          font-size: 12px;
+          font-weight: 700;
+          color: #3b82f6;
+          background: rgba(59,130,246,0.08);
+          padding: 2px 8px;
+          border-radius: 6px;
+          display: inline-block;
+        }
+        .ca-empty-state {
+          padding: 60px 20px;
+          text-align: center;
+        }
+        .ca-empty-icon {
+          width: 56px;
+          height: 56px;
+          background: #f1f5f9;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          margin: 0 auto 14px;
+        }
+        .ca-empty-title {
+          font-size: 14px;
+          font-weight: 600;
+          color: #64748b;
+          margin-bottom: 6px;
+        }
+        .ca-empty-sub {
+          font-size: 12px;
+          color: #94a3b8;
+        }
+      `}</style>
 
-        <div className="flex items-center gap-4">
-          <span className="text-sm text-gray-700 font-semibold">Sort:</span>
-          <div className="relative">
-            <button
-              onClick={() => setSortOpen(!sortOpen)}
-              className="bg-sky-500 hover:bg-sky-600 text-white text-sm px-5 py-2.5 rounded-lg flex items-center gap-2 transition-all shadow-md hover:shadow-lg"
-            >
-              <span className="font-medium">{sort}</span>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                <path d="M6 9l6 6 6-6" />
-              </svg>
-            </button>
-            {sortOpen && (
-              <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded shadow-lg z-10 min-w-32">
-                {sortOptions.map(option => (
-                  <button
-                    key={option}
-                    onClick={() => { setSort(option); setSortOpen(false) }}
-                    className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-100 ${sort === option ? 'bg-sky-100 text-sky-700 font-medium' : 'text-gray-700'}`}
-                  >
-                    {option}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <main className="flex-1 overflow-auto p-6 bg-gray-50">
-        <div className="bg-white rounded-lg border border-gray-200 shadow p-4 flex flex-col">
-          <div className="mb-4">
-            <h2 className="text-sm font-bold text-gray-800">Gesture Log</h2>
-          </div>
-
-          <div className="grid grid-cols-5 border-b-2 border-gray-300 bg-gray-50 rounded-md mb-2">
-            {['Time', 'Date', 'Gesture', 'Chair', 'Student'].map(col => (
-              <div key={col} className="px-4 py-3 text-xs text-gray-700 font-semibold border-r border-gray-200 last:border-r-0">
-                {col}
-              </div>
-            ))}
-          </div>
-
-          <div className="flex-1 overflow-y-auto max-h-[500px]">
-            {filteredLogs.length === 0 ? (
-              <div className="py-8 text-center text-gray-500 text-sm">No gestures recorded</div>
-            ) : (
-              filteredLogs.map(log => (
-                <div key={log.id} className="grid grid-cols-5 border-b border-gray-100 py-2 hover:bg-blue-50 transition-colors">
-                  <div className="px-4 py-2 text-xs text-gray-600">{log.time}</div>
-                  <div className="px-4 py-2 text-xs text-gray-600">{log.date}</div>
-                  <div className="px-4 py-2 text-xs font-medium text-gray-800 capitalize flex items-center gap-2">
-                    <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', backgroundColor: log.color || '#27AE60' }}></span>
-                    {log.gesture}
-                  </div>
-                  <div className="px-4 py-2 text-xs text-gray-600">#{log.chair_rank}</div>
-                  <div className="px-4 py-2 text-xs text-gray-600">{log.student_name}</div>
+      <div className="ca-root">
+        <div className="ca-toolbar">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span className="ca-toolbar-label">Filter</span>
+            <div className="ca-dropdown-wrap">
+              <button className="ca-dropdown-btn" onClick={() => { setFilterOpen(!filterOpen); setSortOpen(false) }}>
+                <span>{filter}</span>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M6 9l6 6 6-6" /></svg>
+              </button>
+              {filterOpen && (
+                <div className="ca-dropdown-menu">
+                  {filterOptions.map(opt => (
+                    <button key={opt} className={`ca-dropdown-item ${filter === opt ? 'active' : ''}`} onClick={() => { setFilter(opt); setFilterOpen(false) }}>{opt}</button>
+                  ))}
                 </div>
-              ))
-            )}
+              )}
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span className="ca-toolbar-label">Sort</span>
+            <div className="ca-dropdown-wrap">
+              <button className="ca-dropdown-btn" onClick={() => { setSortOpen(!sortOpen); setFilterOpen(false) }}>
+                <span>{sort}</span>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M6 9l6 6 6-6" /></svg>
+              </button>
+              {sortOpen && (
+                <div className="ca-dropdown-menu">
+                  {sortOptions.map(opt => (
+                    <button key={opt} className={`ca-dropdown-item ${sort === opt ? 'active' : ''}`} onClick={() => { setSort(opt); setSortOpen(false) }}>{opt}</button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
-      </main>
+
+        <main className="ca-body">
+          <div className="ca-table-card">
+            <div className="ca-table-header-row">
+              <span className="ca-table-title">Gesture Log</span>
+              <span className="ca-table-count">{filteredLogs.length} entries</span>
+            </div>
+
+            <div className="ca-table-cols">
+              {['Time', 'Date', 'Gesture', 'Chair', 'Student'].map(col => (
+                <div key={col} className="ca-col-label">{col}</div>
+              ))}
+            </div>
+
+            <div className="ca-table-body">
+              {filteredLogs.length === 0 ? (
+                <div className="ca-empty-state">
+                  <div className="ca-empty-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                    </svg>
+                  </div>
+                  <div className="ca-empty-title">No gesture detected</div>
+                  <div className="ca-empty-sub">Classroom is secure. Start a session to begin monitoring.</div>
+                </div>
+              ) : (
+                filteredLogs.map(log => {
+                  const color = log.color || getGestureColor(log.gesture)
+                  return (
+                    <div key={log.id} className="ca-table-row">
+                      <div className="ca-cell ca-cell-time">{log.time}</div>
+                      <div className="ca-cell ca-cell-time">{log.date}</div>
+                      <div className="ca-gesture-badge" style={{ color }}>
+                        <span className="ca-gesture-dot" style={{ background: color }} />
+                        <span style={{ textTransform: 'capitalize' }}>{log.gesture}</span>
+                      </div>
+                      <div><span className="ca-rank-badge">#{log.chair_rank}</span></div>
+                      <div className="ca-cell">{log.student_name}</div>
+                    </div>
+                  )
+                })
+              )}
+            </div>
+          </div>
+        </main>
+      </div>
     </>
   )
 }

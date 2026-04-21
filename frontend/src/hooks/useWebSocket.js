@@ -18,6 +18,27 @@ export const useWebSocket = (url, options = {}) => {
   const MAX_RECONNECT_ATTEMPTS = 5;
   const RECONNECT_DELAY = 3000;
 
+  const onMessageRef = useRef(onMessage);
+  const onErrorRef = useRef(onError);
+  const onOpenRef = useRef(onOpen);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onMessageRef.current = onMessage;
+  }, [onMessage]);
+
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
+
+  useEffect(() => {
+    onOpenRef.current = onOpen;
+  }, [onOpen]);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   const connect = useCallback(() => {
     try {
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -30,32 +51,28 @@ export const useWebSocket = (url, options = {}) => {
         setIsConnected(true);
         setError(null);
         setReconnectAttempts(0);
-        console.log(`WebSocket connected to ${url}`);
-        if (onOpen) onOpen(wsRef.current);
+        if (onOpenRef.current) onOpenRef.current(wsRef.current);
       };
 
       wsRef.current.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
           setLastMessage(data);
-          if (onMessage) onMessage(data);
+          if (onMessageRef.current) onMessageRef.current(data);
         } catch (err) {
-          console.error("Failed to parse WebSocket message:", err);
-          if (onError) onError(err);
+          if (onErrorRef.current) onErrorRef.current(err);
         }
       };
 
-      wsRef.current.onerror = (event) => {
-        console.error("WebSocket error:", event);
+      wsRef.current.onerror = () => {
         const err = new Error("WebSocket connection error");
         setError(err);
-        if (onError) onError(err);
+        if (onErrorRef.current) onErrorRef.current(err);
       };
 
       wsRef.current.onclose = () => {
         setIsConnected(false);
-        console.log(`WebSocket disconnected from ${url}`);
-        if (onClose) onClose();
+        if (onCloseRef.current) onCloseRef.current();
 
         if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
           reconnectTimeoutRef.current = setTimeout(() => {
@@ -65,11 +82,10 @@ export const useWebSocket = (url, options = {}) => {
         }
       };
     } catch (err) {
-      console.error("Failed to create WebSocket connection:", err);
       setError(err);
-      if (onError) onError(err);
+      if (onErrorRef.current) onErrorRef.current(err);
     }
-  }, [url, onMessage, onError, onOpen, onClose, reconnectAttempts]);
+  }, [url]);
 
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current) {
@@ -87,19 +103,15 @@ export const useWebSocket = (url, options = {}) => {
       try {
         wsRef.current.send(JSON.stringify(data));
       } catch (err) {
-        console.error("Failed to send WebSocket message:", err);
-        if (onError) onError(err);
+        if (onErrorRef.current) onErrorRef.current(err);
       }
-    } else {
-      console.warn("WebSocket is not connected");
     }
-  }, [onError]);
+  }, []);
 
   useEffect(() => {
     if (autoConnect) {
       connect();
     }
-
     return () => {
       disconnect();
     };
@@ -119,16 +131,20 @@ export const useWebSocket = (url, options = {}) => {
 export const useGestureStream = (sessionId, numSeats = 20) => {
   const [gestures, setGestures] = useState([]);
   const [stats, setStats] = useState({});
+  const configSentRef = useRef(false);
 
   const { isConnected, lastMessage, send } = useWebSocket(
     `ws://localhost:8000/ws/gesture/${sessionId}/`,
     {
       onOpen: () => {
-        send({
-          type: "config",
-          num_seats: numSeats,
-          session_id: sessionId,
-        });
+        if (!configSentRef.current) {
+          configSentRef.current = true;
+          send({
+            type: "config",
+            num_seats: numSeats,
+            session_id: sessionId,
+          });
+        }
       },
       onMessage: (data) => {
         if (data.type === "gesture_detected") {
