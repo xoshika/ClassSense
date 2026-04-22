@@ -3,17 +3,19 @@ import { useGestureStream } from '../hooks/useWebSocket';
 
 function getGestureStatus(gesture, mode) {
   const rules = {
-    lesson: { allowed: ['raised_hand','peace_sign'], warning: ['wave','clap'], alert: [] },
-    quiz:   { allowed: ['raised_hand'], warning: [], alert: ['peace_sign','thumbs_up','thumbs_down','clap','wave','ok_sign'] },
-    exam:   { allowed: [], warning: ['raised_hand'], alert: ['peace_sign','thumbs_up','thumbs_down','clap','wave','ok_sign'] },
-  }[mode] || { allowed: [], warning: [], alert: [] };
-  if (rules.allowed.includes(gesture)) return { color: '#10b981', label: 'Allowed',  bg: 'rgba(16,185,129,0.85)' };
-  if (rules.warning.includes(gesture)) return { color: '#f59e0b', label: 'Warning',  bg: 'rgba(245,158,11,0.85)' };
-  if (rules.alert.includes(gesture))   return { color: '#ef4444', label: 'Alert',    bg: 'rgba(239,68,68,0.85)' };
-  return                                       { color: '#3b82f6', label: 'Detected', bg: 'rgba(59,130,246,0.85)' };
+    lesson:  { allowed: ['raised_hand','peace_sign'], warning: ['wave','clap'], alert: [] },
+    lecture: { allowed: ['raised_hand','peace_sign','thumbs_up','thumbs_down','ok_sign','clapping','walking','head_moving'], warning: [], alert: [] },
+    quiz:    { allowed: ['raised_hand'], warning: [], alert: ['peace_sign','thumbs_up','thumbs_down','clap','wave','ok_sign','clapping','walking','head_moving'] },
+    exam:    { allowed: [], warning: ['raised_hand'], alert: ['peace_sign','thumbs_up','thumbs_down','clap','wave','ok_sign','clapping','walking','head_moving'] },
+  }[mode?.toLowerCase()] || { allowed: [], warning: [], alert: [] };
+  const g = gesture?.toLowerCase().replace(/ /g, '_');
+  if (rules.allowed.includes(g)) return { color: '#10b981', label: 'Allowed',  bg: 'rgba(16,185,129,0.85)' };
+  if (rules.warning.includes(g)) return { color: '#f59e0b', label: 'Warning',  bg: 'rgba(245,158,11,0.85)' };
+  if (rules.alert.includes(g))   return { color: '#ef4444', label: 'Alert',    bg: 'rgba(239,68,68,0.85)' };
+  return                                 { color: '#3b82f6', label: 'Detected', bg: 'rgba(59,130,246,0.85)' };
 }
 
-const fmt = (g) => g.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+const fmt = (g) => (g || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 
 export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', onGestureDetected = null }) {
   const videoRef         = useRef(null);
@@ -21,11 +23,14 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
   const modalVideoRef    = useRef(null);
   const frameIntervalRef = useRef(null);
   const streamRef        = useRef(null);
+  const onGestureRef     = useRef(onGestureDetected);
 
-  const [isRunning, setIsRunning]           = useState(false);
+  useEffect(() => { onGestureRef.current = onGestureDetected; }, [onGestureDetected]);
+
+  const [isRunning, setIsRunning]       = useState(false);
   const [currentGesture, setCurrentGesture] = useState(null);
-  const [isModalOpen, setIsModalOpen]       = useState(false);
-  const [liveTime, setLiveTime]             = useState('');
+  const [isModalOpen, setIsModalOpen]   = useState(false);
+  const [liveTime, setLiveTime]         = useState('');
 
   const { gestures, isConnected, sendFrame } = useGestureStream(sessionId, numSeats);
 
@@ -43,9 +48,9 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
     if (gestures.length > 0) {
       const latest = gestures[0];
       setCurrentGesture(latest);
-      if (onGestureDetected) onGestureDetected(latest);
+      if (onGestureRef.current) onGestureRef.current(latest);
     }
-  }, [gestures, onGestureDetected]);
+  }, [gestures]);
 
   const captureAndSendFrame = useCallback(() => {
     const video  = videoRef.current;
@@ -63,7 +68,10 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
         video: { width: { ideal: 1280 }, height: { ideal: 720 } },
       });
       streamRef.current = stream;
-      if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play(); }
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
       setIsRunning(true);
     } catch {
       alert('Could not access camera. Please check permissions.');
@@ -81,7 +89,7 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
 
   useEffect(() => {
     if (isRunning) {
-      frameIntervalRef.current = setInterval(captureAndSendFrame, 200);
+      frameIntervalRef.current = setInterval(captureAndSendFrame, 300);
     } else {
       if (frameIntervalRef.current) { clearInterval(frameIntervalRef.current); frameIntervalRef.current = null; }
     }
@@ -257,7 +265,10 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
         <canvas ref={canvasRef} style={{ display: 'none' }} />
 
         <div className="lc-controls">
-          <button onClick={() => isRunning ? stopCamera() : startCamera()} className={`lc-cam-btn ${isRunning ? 'stop' : 'start'}`}>
+          <button
+            onClick={() => isRunning ? stopCamera() : startCamera()}
+            className={`lc-cam-btn ${isRunning ? 'stop' : 'start'}`}
+          >
             {isRunning
               ? <><svg width="12" height="12" viewBox="0 0 24 24" fill="white"><rect x="6" y="6" width="12" height="12" /></svg>Stop Camera</>
               : <><svg width="12" height="12" viewBox="0 0 24 24" fill="white"><polygon points="5 3 19 12 5 21 5 3" /></svg>Start Camera</>
@@ -290,12 +301,10 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
             <div style={{ maxHeight: 160, overflowY: 'auto' }}>
               {gestures.slice(0, 8).map((g, i) => {
                 const info = getGestureStatus(g.gesture, mode);
-                const ts = g.timestamp
-                  ? new Date(g.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-                  : liveTime;
+                const ts = g.time || liveTime;
                 return (
                   <div key={i} className="lc-alert-item" style={{ borderLeftColor: info.color }}>
-                    <span className="lc-alert-info">Chair {g.seat} — {fmt(g.gesture)}</span>
+                    <span className="lc-alert-info">Chair {g.chair_rank || g.seat || 1} — {fmt(g.gesture)}</span>
                     <span className="lc-alert-time">{ts}</span>
                   </div>
                 );
@@ -320,7 +329,7 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
               <div className="lc-overlay-bottom">
                 {currentGesture && statusInfo && (
                   <div className="lc-gesture-chip" style={{ background: statusInfo.bg, fontSize: 14, padding: '7px 16px' }}>
-                    {fmt(currentGesture.gesture)} — Seat {currentGesture.seat}
+                    {fmt(currentGesture.gesture)} — Seat {currentGesture.chair_rank || currentGesture.seat || 1}
                   </div>
                 )}
                 <div className="lc-time" style={{ fontSize: 13 }}>{liveTime}</div>

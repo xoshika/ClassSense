@@ -3,6 +3,7 @@ import base64
 import json
 import time
 
+from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.utils import timezone
@@ -18,10 +19,14 @@ class GestureConsumer(AsyncWebsocketConsumer):
 
     async def connect(self):
         await self.accept()
+        try:
+            ready = await sync_to_async(lambda: engine.ready)()
+        except Exception:
+            ready = False
         await self._send({
             "type": "connected",
             "message": "ClassSense WebSocket ready",
-            "detector_ready": engine.ready,
+            "detector_ready": ready,
         })
 
     async def disconnect(self, close_code):
@@ -52,8 +57,11 @@ class GestureConsumer(AsyncWebsocketConsumer):
     async def _handle_frame(self, data: dict):
         session_id = data.get("session_id")
         frame_b64: str = data.get("frame", "")
+        chair_rank = int(data.get("chair_rank", 1))
         if not session_id or not frame_b64:
+            print(f"[ClassSense] Frame rejected: session_id={session_id}, frame_len={len(frame_b64)}")
             return
+        print(f"[ClassSense] Frame received: session={session_id}, frame_len={len(frame_b64)}, chair={chair_rank}")
         try:
             if "," in frame_b64:
                 frame_b64 = frame_b64.split(",", 1)[1]
@@ -63,6 +71,7 @@ class GestureConsumer(AsyncWebsocketConsumer):
 
         loop = asyncio.get_event_loop()
         gestures: list[str] = await loop.run_in_executor(None, engine.process, frame_bytes)
+        print(f"[ClassSense] Gestures found: {gestures}")
 
         if not gestures:
             await self._send({"type": "no_gesture"})
@@ -70,12 +79,12 @@ class GestureConsumer(AsyncWebsocketConsumer):
 
         session = await self._get_session_obj(session_id)
         if not session:
-            await self._send({"type": "error", "message": "No active session found."})
+            await self._send({"type": "error", "message": "Session not found."})
             return
 
         results = []
         for gesture in gestures:
-            result = await self._save_gesture(session, gesture)
+            result = await self._save_gesture(session, gesture, chair_rank)
             if result:
                 results.append(result)
 
@@ -97,13 +106,13 @@ class GestureConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _get_session_obj(self, session_id):
         try:
-            return ClassSession.objects.get(pk=session_id, is_active=True)
+            return ClassSession.objects.get(pk=session_id)
         except ClassSession.DoesNotExist:
             return None
 
     @database_sync_to_async
-    def _save_gesture(self, session, gesture: str):
-        key = f"{session.id}_{gesture}"
+    def _save_gesture(self, session, gesture: str, chair_rank: int = 1):
+        key = f"{session.id}_{gesture}_{chair_rank}"
         now_ts = time.monotonic()
         if key in _last_gesture and (now_ts - _last_gesture[key]) < _THROTTLE_SEC:
             return None
@@ -113,7 +122,6 @@ class GestureConsumer(AsyncWebsocketConsumer):
         mode = session.activity_mode
         rule = get_rule(gesture, mode)
 
-        chair_rank = 1
         roster = StudentRoster.objects.filter(session=session, chair_rank=chair_rank).first()
         student_name = roster.student_name if roster else f"Student {chair_rank}"
 

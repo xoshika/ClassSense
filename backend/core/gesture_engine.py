@@ -79,12 +79,13 @@ def get_rule(gesture: str, mode: str) -> dict:
     return rules.get(gesture, {"status": "neutral", "color": "#7F8C8D", "label": "📋 Noted"})
 
 
-def _read_weights(weight_data: bytes, weights_manifest: list) -> list:
-    """Parse weights.bin → list of numpy arrays in manifest order."""
-    all_weights = []
+def _read_weights_named(weight_data: bytes, weights_manifest: list):
+    named = {}
+    ordered = []
     offset = 0
     for manifest in weights_manifest:
         for w in manifest.get("weights", []):
+            name  = w["name"]
             shape = w.get("shape", [])
             size  = int(np.prod(shape)) if shape else 1
             chunk = np.frombuffer(
@@ -93,137 +94,118 @@ def _read_weights(weight_data: bytes, weights_manifest: list) -> list:
             ).copy()
             if shape:
                 chunk = chunk.reshape(shape)
-            all_weights.append(chunk)
+            named[name] = chunk
+            ordered.append((name, chunk))
             offset += size * 4
-    return all_weights
+    return named, ordered
 
 
 def load_tfjs_image_model(model_dir: str):
-    """
-    Load Teachable Machine image model.
-    Strategy: build model to match weight count, then assign weights
-    by matching shapes rather than position.
-    """
     import tensorflow as tf
 
-    model_json_path = os.path.join(model_dir, "model.json")
-    weights_path    = os.path.join(model_dir, "weights.bin")
-
-    if not os.path.exists(model_json_path):
-        raise FileNotFoundError(f"model.json not found in {model_dir}")
-    if not os.path.exists(weights_path):
-        raise FileNotFoundError(f"weights.bin not found in {model_dir}")
-
-    with open(model_json_path, "r") as f:
+    with open(os.path.join(model_dir, "model.json"), "r") as f:
         model_json = json.load(f)
-    with open(weights_path, "rb") as f:
+    with open(os.path.join(model_dir, "weights.bin"), "rb") as f:
         weight_data = f.read()
 
-    bin_weights = _read_weights(weight_data, model_json.get("weightsManifest", []))
-    n_classes   = len(IMAGE_LABELS)
-    n_bin       = len(bin_weights)
-    print(f"[ClassSense] Image model bin has {n_bin} weight tensors")
+    named, ordered = _read_weights_named(weight_data, model_json.get("weightsManifest", []))
 
-    # Try each alpha until weight count matches
-    for alpha in [0.35, 0.25, 0.5, 0.75, 1.0]:
-        base = tf.keras.applications.MobileNetV2(
-            input_shape=(224, 224, 3),
-            alpha=alpha,
-            include_top=False,
-            pooling="avg",
-            weights=None,
-        )
-        x       = base.output
-        x       = tf.keras.layers.Dense(100, activation="relu",
-                                        use_bias=True, name="head_dense")(x)
-        outputs = tf.keras.layers.Dense(n_classes, activation="softmax",
-                                        use_bias=False, name="head_out")(x)
-        model   = tf.keras.Model(inputs=base.input, outputs=outputs)
+    trainable_weights = [(n, v) for n, v in ordered if "moving" not in n]
+    moving_weights    = [(n, v) for n, v in ordered if "moving" in n]
 
-        model_shapes = [w.shape for w in model.get_weights()]
-        bin_shapes   = [w.shape for w in bin_weights]
-        n_model      = len(model_shapes)
+    print(f"[ClassSense] Image: {len(trainable_weights)} trainable, {len(moving_weights)} moving stats")
 
-        print(f"[ClassSense] alpha={alpha}: model={n_model}, bin={n_bin}")
+    n_classes = len(IMAGE_LABELS)
+    base = tf.keras.applications.MobileNetV2(
+        input_shape=(224, 224, 3),
+        alpha=0.35,
+        include_top=False,
+        pooling="avg",
+        weights=None,
+    )
+    x       = base.output
+    x       = tf.keras.layers.Dense(100, activation="relu", use_bias=True,  name="dense_head")(x)
+    outputs = tf.keras.layers.Dense(n_classes, activation="softmax", use_bias=False, name="dense_out")(x)
+    model   = tf.keras.Model(inputs=base.input, outputs=outputs)
 
-        if n_bin < n_model:
+    trainable_idx = 0
+    moving_idx    = 0
+
+    for layer in model.layers:
+        layer_weights = layer.weights
+        if not layer_weights:
             continue
 
-        # Try direct assignment (bin order matches model order)
-        try:
-            model.set_weights(bin_weights[:n_model])
-            print(f"[ClassSense] ✓ Image model loaded (alpha={alpha}, direct)")
-            return model
-        except Exception:
-            pass
+        has_moving = any("moving" in w.name for w in layer_weights)
 
-        # Try shape-matched assignment: assign each model weight from the
-        # first bin weight with matching shape
-        try:
-            assigned   = []
-            used       = [False] * n_bin
-            success    = True
-            for ms in model_shapes:
-                found = False
-                for i, bw in enumerate(bin_weights):
-                    if not used[i] and bw.shape == ms:
-                        assigned.append(bw)
-                        used[i] = True
-                        found = True
-                        break
-                if not found:
-                    success = False
-                    break
-            if success and len(assigned) == n_model:
-                model.set_weights(assigned)
-                print(f"[ClassSense] ✓ Image model loaded (alpha={alpha}, shape-matched)")
-                return model
-        except Exception as e:
-            print(f"[ClassSense] alpha={alpha} shape-match failed: {e}")
+        if has_moving:
+            non_moving = [w for w in layer_weights if "moving" not in w.name]
+            moving_w   = [w for w in layer_weights if "moving" in w.name]
 
-    raise RuntimeError("Could not load image model with any alpha.")
+            new_vals = []
+            for w in layer_weights:
+                if "moving" not in w.name:
+                    if trainable_idx < len(trainable_weights):
+                        new_vals.append(trainable_weights[trainable_idx][1])
+                        trainable_idx += 1
+                    else:
+                        new_vals.append(w.numpy())
+                else:
+                    if moving_idx < len(moving_weights):
+                        new_vals.append(moving_weights[moving_idx][1])
+                        moving_idx += 1
+                    else:
+                        new_vals.append(w.numpy())
+            try:
+                layer.set_weights(new_vals)
+            except Exception as e:
+                print(f"[ClassSense] BN layer {layer.name} failed: {e}")
+        else:
+            new_vals = []
+            for w in layer_weights:
+                if trainable_idx < len(trainable_weights):
+                    new_vals.append(trainable_weights[trainable_idx][1])
+                    trainable_idx += 1
+                else:
+                    new_vals.append(w.numpy())
+            try:
+                layer.set_weights(new_vals)
+            except Exception as e:
+                print(f"[ClassSense] Layer {layer.name} failed: {e}")
+
+    print(f"[ClassSense] Image: used {trainable_idx} trainable, {moving_idx} moving stats")
+    print(f"[ClassSense] ✓ Image model loaded")
+    return model
 
 
 def load_tfjs_pose_model(model_dir: str):
     import tensorflow as tf
 
-    model_json_path = os.path.join(model_dir, "model.json")
-    weights_path    = os.path.join(model_dir, "weights.bin")
-
-    if not os.path.exists(model_json_path):
-        raise FileNotFoundError(f"model.json not found in {model_dir}")
-    if not os.path.exists(weights_path):
-        raise FileNotFoundError(f"weights.bin not found in {model_dir}")
-
-    with open(model_json_path, "r") as f:
+    with open(os.path.join(model_dir, "model.json"), "r") as f:
         model_json = json.load(f)
-    with open(weights_path, "rb") as f:
+    with open(os.path.join(model_dir, "weights.bin"), "rb") as f:
         weight_data = f.read()
 
-    bin_weights = _read_weights(weight_data, model_json.get("weightsManifest", []))
+    _, ordered   = _read_weights_named(weight_data, model_json.get("weightsManifest", []))
+    bin_list     = [v for _, v in ordered]
+    input_size   = 14739
+    if bin_list and len(bin_list[0].shape) == 2:
+        input_size = bin_list[0].shape[0]
 
-    # Detect input size from first weight shape or batch_input_shape
-    input_size = 14739
-    if bin_weights and len(bin_weights[0].shape) == 2:
-        input_size = bin_weights[0].shape[0]
-
-    print(f"[ClassSense] Pose model: {len(bin_weights)} weights, input={input_size}")
+    print(f"[ClassSense] Pose model: {len(bin_list)} tensors, input={input_size}")
 
     n_classes = len(POSE_LABELS)
     model = tf.keras.Sequential([
         tf.keras.layers.Input(shape=(input_size,)),
-        tf.keras.layers.Dense(100, activation="relu",  use_bias=True,  name="d1"),
-        tf.keras.layers.Dropout(0.5,                                    name="drop"),
-        tf.keras.layers.Dense(n_classes, activation="softmax",
-                              use_bias=False,                            name="dout"),
+        tf.keras.layers.Dense(100, activation="relu", use_bias=True,  name="d1"),
+        tf.keras.layers.Dropout(0.5,                                   name="drop"),
+        tf.keras.layers.Dense(n_classes, activation="softmax", use_bias=False, name="dout"),
     ])
 
     needed = len(model.get_weights())
-    if len(bin_weights) >= needed:
-        model.set_weights(bin_weights[:needed])
-        print(f"[ClassSense] ✓ Pose model loaded")
-        return model
-    raise ValueError(f"Pose model weight mismatch: need {needed}, got {len(bin_weights)}")
+    model.set_weights(bin_list[:needed])
+    print(f"[ClassSense] ✓ Pose model loaded")
+    return model
 
 
 def _load_pose_landmarker():
@@ -247,9 +229,9 @@ def _load_pose_landmarker():
     options = PoseLandmarkerOptions(
         base_options=BaseOptions(model_asset_path=model_path),
         running_mode=VisionRunningMode.IMAGE,
-        min_pose_detection_confidence=0.5,
-        min_pose_presence_confidence=0.5,
-        min_tracking_confidence=0.5,
+        min_pose_detection_confidence=0.4,
+        min_pose_presence_confidence=0.4,
+        min_tracking_confidence=0.4,
     )
     return PoseLandmarker.create_from_options(options)
 
@@ -263,7 +245,7 @@ class GestureEngine:
             cls._instance._initialized = False
         return cls._instance
 
-    def __init__(self, confidence_threshold: float = 0.65):
+    def __init__(self, confidence_threshold: float = 0.35):
         if self._initialized:
             return
 
@@ -323,6 +305,7 @@ class GestureEngine:
                 best_idx  = int(np.argmax(preds))
                 conf      = float(preds[best_idx])
                 raw_label = IMAGE_LABELS[best_idx] if best_idx < len(IMAGE_LABELS) else "none"
+                print(f"[ClassSense] Image: {raw_label} conf={conf:.3f} all={[f'{p:.2f}' for p in preds]}")
                 if conf >= self.confidence_threshold and raw_label != "none":
                     display = LABEL_DISPLAY.get(raw_label, raw_label)
                     if display != "none" and display not in found:
@@ -347,10 +330,13 @@ class GestureEngine:
                     best_idx  = int(np.argmax(preds))
                     conf      = float(preds[best_idx])
                     raw_label = POSE_LABELS[best_idx] if best_idx < len(POSE_LABELS) else "none"
+                    print(f"[ClassSense] Pose: {raw_label} conf={conf:.3f} all={[f'{p:.2f}' for p in preds]}")
                     if conf >= self.confidence_threshold and raw_label != "none":
                         display = LABEL_DISPLAY.get(raw_label, raw_label)
                         if display != "none" and display not in found:
                             found.append(display)
+                else:
+                    print(f"[ClassSense] Pose: no landmarks detected")
             except Exception as e:
                 print(f"[ClassSense] Pose predict error: {e}")
 

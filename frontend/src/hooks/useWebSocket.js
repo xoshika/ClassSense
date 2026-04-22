@@ -11,46 +11,34 @@ export const useWebSocket = (url, options = {}) => {
 
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
+  const reconnectAttemptsRef = useRef(0);
   const [isConnected, setIsConnected] = useState(false);
   const [lastMessage, setLastMessage] = useState(null);
   const [error, setError] = useState(null);
-  const [reconnectAttempts, setReconnectAttempts] = useState(0);
-  const MAX_RECONNECT_ATTEMPTS = 5;
-  const RECONNECT_DELAY = 3000;
 
   const onMessageRef = useRef(onMessage);
   const onErrorRef = useRef(onError);
   const onOpenRef = useRef(onOpen);
   const onCloseRef = useRef(onClose);
 
-  useEffect(() => {
-    onMessageRef.current = onMessage;
-  }, [onMessage]);
+  useEffect(() => { onMessageRef.current = onMessage; }, [onMessage]);
+  useEffect(() => { onErrorRef.current = onError; }, [onError]);
+  useEffect(() => { onOpenRef.current = onOpen; }, [onOpen]);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
-  useEffect(() => {
-    onErrorRef.current = onError;
-  }, [onError]);
-
-  useEffect(() => {
-    onOpenRef.current = onOpen;
-  }, [onOpen]);
-
-  useEffect(() => {
-    onCloseRef.current = onClose;
-  }, [onClose]);
+  const MAX_RECONNECT_ATTEMPTS = 5;
+  const RECONNECT_DELAY = 3000;
 
   const connect = useCallback(() => {
-    try {
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        return;
-      }
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
 
+    try {
       wsRef.current = new WebSocket(url);
 
       wsRef.current.onopen = () => {
         setIsConnected(true);
         setError(null);
-        setReconnectAttempts(0);
+        reconnectAttemptsRef.current = 0;
         if (onOpenRef.current) onOpenRef.current(wsRef.current);
       };
 
@@ -73,10 +61,9 @@ export const useWebSocket = (url, options = {}) => {
       wsRef.current.onclose = () => {
         setIsConnected(false);
         if (onCloseRef.current) onCloseRef.current();
-
-        if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+        if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+          reconnectAttemptsRef.current += 1;
           reconnectTimeoutRef.current = setTimeout(() => {
-            setReconnectAttempts((prev) => prev + 1);
             connect();
           }, RECONNECT_DELAY);
         }
@@ -88,10 +75,10 @@ export const useWebSocket = (url, options = {}) => {
   }, [url]);
 
   const disconnect = useCallback(() => {
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-    }
+    reconnectAttemptsRef.current = MAX_RECONNECT_ATTEMPTS;
+    if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
     if (wsRef.current) {
+      wsRef.current.onclose = null;
       wsRef.current.close();
       wsRef.current = null;
     }
@@ -109,37 +96,24 @@ export const useWebSocket = (url, options = {}) => {
   }, []);
 
   useEffect(() => {
-    if (autoConnect) {
-      connect();
-    }
-    return () => {
-      disconnect();
-    };
+    if (autoConnect) connect();
+    return () => disconnect();
   }, [autoConnect, connect, disconnect]);
 
-  return {
-    isConnected,
-    lastMessage,
-    error,
-    send,
-    connect,
-    disconnect,
-    reconnectAttempts,
-  };
+  return { isConnected, lastMessage, error, send, connect, disconnect };
 };
 
 export const useGestureStream = (sessionId, numSeats = 20) => {
   const [gestures, setGestures] = useState([]);
   const [stats, setStats] = useState({});
-  const configSentRef = useRef(false);
+  const sendRef = useRef(null);
 
   const { isConnected, lastMessage, send } = useWebSocket(
     `ws://localhost:8000/ws/gesture/${sessionId}/`,
     {
       onOpen: () => {
-        if (!configSentRef.current) {
-          configSentRef.current = true;
-          send({
+        if (sendRef.current) {
+          sendRef.current({
             type: "config",
             num_seats: numSeats,
             session_id: sessionId,
@@ -156,13 +130,16 @@ export const useGestureStream = (sessionId, numSeats = 20) => {
           }));
         }
       },
-      autoConnect: !!sessionId,
+      autoConnect: !!sessionId && !isNaN(Number(sessionId)) && Number(sessionId) > 0,
     }
   );
 
+  useEffect(() => {
+    sendRef.current = send;
+  }, [send]);
+
   const sendFrame = useCallback(
     (imageData) => {
-      if (!send) return;
       send({
         type: "frame",
         session_id: sessionId,
@@ -172,42 +149,7 @@ export const useGestureStream = (sessionId, numSeats = 20) => {
     [send, sessionId]
   );
 
-  return {
-    gestures,
-    stats,
-    isConnected,
-    sendFrame,
-    lastMessage,
-  };
-};
-
-export const useSessionUpdates = (sessionId) => {
-  const [updates, setUpdates] = useState([]);
-
-  const { isConnected, send } = useWebSocket(
-    `ws://localhost:8000/ws/session/${sessionId}/`,
-    {
-      onMessage: (data) => {
-        if (data.type === "session_update") {
-          setUpdates((prev) => [data, ...prev.slice(0, 99)]);
-        }
-      },
-      autoConnect: !!sessionId,
-    }
-  );
-
-  const broadcastUpdate = useCallback(
-    (message, type = "generic") => {
-      send({ message, type });
-    },
-    [send]
-  );
-
-  return {
-    updates,
-    isConnected,
-    broadcastUpdate,
-  };
+  return { gestures, stats, isConnected, sendFrame, lastMessage };
 };
 
 export default useWebSocket;
