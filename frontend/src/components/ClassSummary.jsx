@@ -1,7 +1,26 @@
-import React from "react";
+import React, { useMemo } from "react";
 
 export default function ClassSummary({ classSetup, gestureLog, onSaveProgress, onStartNewClass, onDiscard }) {
   const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+
+  // Compute real stats from gestureLog
+  const computedStats = useMemo(() => {
+    const totalGestures = gestureLog.length
+    const uniqueStudents = new Set(gestureLog.map(r => r.student || r.rankChair).filter(Boolean)).size
+    const alerts = gestureLog.filter(r => r.isAlert || r.alert).length
+    const uniqueGestureTypes = new Set(gestureLog.map(r => r.gesture).filter(Boolean)).size
+
+    // Aggregate gestures per student
+    const studentMap = {}
+    gestureLog.forEach(row => {
+      const key = row.student || row.rankChair || 'Unknown'
+      if (!studentMap[key]) studentMap[key] = { name: key, chair: row.rankChair, count: 0 }
+      studentMap[key].count++
+    })
+    const ranked = Object.values(studentMap).sort((a, b) => b.count - a.count)
+
+    return { totalGestures, uniqueStudents, alerts, uniqueGestureTypes, ranked }
+  }, [gestureLog])
 
   return (
     <>
@@ -117,10 +136,10 @@ export default function ClassSummary({ classSetup, gestureLog, onSaveProgress, o
               <div className="cs-sum-card-title">Class Statistics</div>
               <div className="cs-sum-stats-grid">
                 {[
-                  { label: 'Total Gestures', value: gestureLog.length },
-                  { label: 'Students Participated', value: 0 },
-                  { label: 'Total Alerts', value: 0 },
-                  { label: 'Gesture Type', value: 0 },
+                  { label: 'Total Gestures', value: computedStats.totalGestures },
+                  { label: 'Students Participated', value: computedStats.uniqueStudents },
+                  { label: 'Total Alerts', value: computedStats.alerts },
+                  { label: 'Gesture Types', value: computedStats.uniqueGestureTypes },
                 ].map(({ label, value }) => (
                   <div key={label} className="cs-sum-stat-item">
                     <div className="cs-sum-stat-label">{label}</div>
@@ -135,22 +154,31 @@ export default function ClassSummary({ classSetup, gestureLog, onSaveProgress, o
               <table className="cs-sum-table">
                 <thead className="cs-sum-thead">
                   <tr>
-                    {['Rank','Student','Chair','Gestures','Gesture Type'].map(h => <th key={h}>{h}</th>)}
+                    {['Rank','Student','Chair','Gestures','Top Gesture'].map(h => <th key={h}>{h}</th>)}
                   </tr>
                 </thead>
                 <tbody className="cs-sum-tbody">
-                  {gestureLog.length === 0 ? (
+                  {computedStats.ranked.length === 0 ? (
                     <tr><td colSpan="5" className="cs-sum-empty">No participation data</td></tr>
                   ) : (
-                    gestureLog.map((row, i) => (
-                      <tr key={i}>
-                        <td>{i + 1}</td>
-                        <td>{row.student || '—'}</td>
-                        <td>{row.rankChair || '—'}</td>
-                        <td>1</td>
-                        <td style={{ textTransform: 'capitalize' }}>{row.gesture}</td>
-                      </tr>
-                    ))
+                    computedStats.ranked.map((row, i) => {
+                      const topGesture = gestureLog
+                        .filter(r => (r.student || r.rankChair) === row.name)
+                        .reduce((acc, r) => {
+                          acc[r.gesture] = (acc[r.gesture] || 0) + 1
+                          return acc
+                        }, {})
+                      const top = Object.entries(topGesture).sort((a, b) => b[1] - a[1])[0]?.[0] || '—'
+                      return (
+                        <tr key={i}>
+                          <td style={{ fontWeight: 700, color: i === 0 ? '#3b82f6' : '#475569' }}>#{i + 1}</td>
+                          <td style={{ fontWeight: 600 }}>{row.name}</td>
+                          <td>{row.chair || '—'}</td>
+                          <td style={{ fontWeight: 700, color: '#3b82f6' }}>{row.count}</td>
+                          <td style={{ textTransform: 'capitalize' }}>{top}</td>
+                        </tr>
+                      )
+                    })
                   )}
                 </tbody>
               </table>
