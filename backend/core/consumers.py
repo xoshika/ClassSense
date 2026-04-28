@@ -11,13 +11,16 @@ from django.utils import timezone
 from .gesture_engine import engine, get_rule
 from .models import Alert, ClassSession, GestureLog, StudentRoster
 
-_THROTTLE_SEC = 3.0
+_THROTTLE_SEC = 2.0
 _last_gesture: dict[str, float] = {}
 
 
 class GestureConsumer(AsyncWebsocketConsumer):
 
     async def connect(self):
+        self._pinned_chair = None
+        self._num_chairs   = 1
+        self._locked       = False
         await self.accept()
         try:
             ready = await sync_to_async(lambda: engine.ready)()
@@ -44,8 +47,26 @@ class GestureConsumer(AsyncWebsocketConsumer):
 
         if msg_type == "ping":
             await self._send({"type": "pong"})
+
+        elif msg_type == "config":
+            self._num_chairs   = int(data.get("num_seats", 1))
+            self._pinned_chair = data.get("pinned_chair", None)
+            if self._pinned_chair is not None:
+                self._pinned_chair = int(self._pinned_chair)
+
+        elif msg_type == "pin_chair":
+            chair = data.get("chair_rank")
+            self._pinned_chair = int(chair) if chair is not None else None
+            await self._send({"type": "pin_ack", "pinned_chair": self._pinned_chair})
+
+        elif msg_type == "lock_detection":
+            self._locked = bool(data.get("locked", False))
+            await self._send({"type": "lock_ack", "locked": self._locked})
+
         elif msg_type == "frame":
-            await self._handle_frame(data)
+            if not self._locked:
+                await self._handle_frame(data)
+
         elif msg_type == "get_status":
             session = await self._get_active_session()
             await self._send({
@@ -57,11 +78,10 @@ class GestureConsumer(AsyncWebsocketConsumer):
     async def _handle_frame(self, data: dict):
         session_id = data.get("session_id")
         frame_b64: str = data.get("frame", "")
-        chair_rank = int(data.get("chair_rank", 1))
-        if not session_id or not frame_b64:
-            print(f"[ClassSense] Frame rejected: session_id={session_id}, frame_len={len(frame_b64)}")
+
+        if not frame_b64:
             return
-        print(f"[ClassSense] Frame received: session={session_id}, frame_len={len(frame_b64)}, chair={chair_rank}")
+
         try:
             if "," in frame_b64:
                 frame_b64 = frame_b64.split(",", 1)[1]
@@ -70,21 +90,59 @@ class GestureConsumer(AsyncWebsocketConsumer):
             return
 
         loop = asyncio.get_event_loop()
-        gestures: list[str] = await loop.run_in_executor(None, engine.process, frame_bytes)
-        print(f"[ClassSense] Gestures found: {gestures}")
+        gesture_results: list[dict] = await loop.run_in_executor(
+            None,
+            lambda: engine.process(
+                frame_bytes,
+                num_chairs=self._num_chairs,
+                pinned_chair=self._pinned_chair,
+                session_id=session_id,
+            )
+        )
+        print(f"[ClassSense] Gestures found: {gesture_results}")
 
-        if not gestures:
+        if not gesture_results:
             await self._send({"type": "no_gesture"})
             return
 
-        session = await self._get_session_obj(session_id)
-        if not session:
-            await self._send({"type": "error", "message": "Session not found."})
+        session_id_int = int(session_id) if session_id else 0
+        session = None
+        if session_id_int > 0:
+            session = await self._get_session_obj(session_id_int)
+
+        if session is None:
+            session = await self._get_active_session_obj()
+
+        if session is None:
+            await self._send({"type": "gesture_detected", "gestures": [
+                {
+                    "log_id": None,
+                    "chair_rank": item.get("chair_rank", 1),
+                    "student_name": f"Student {item.get('chair_rank', 1)}",
+                    "gesture": item["gesture"],
+                    "confidence": round(item.get("confidence", 0) * 100, 1),
+                    "activity_mode": "Lecture",
+                    "status": "neutral",
+                    "color": "#7F8C8D",
+                    "label": "Detected",
+                    "time": timezone.now().strftime("%I:%M %p"),
+                    "date": timezone.now().strftime("%B %d %Y"),
+                    "date_key": str(timezone.now().date()),
+                    "is_alert": False,
+                    "alert": None,
+                }
+                for item in gesture_results
+            ]})
             return
 
         results = []
-        for gesture in gestures:
-            result = await self._save_gesture(session, gesture, chair_rank)
+        for item in gesture_results:
+            result = await self._save_gesture(
+                session,
+                item["gesture"],
+                item["chair_rank"],
+                item.get("confidence", 0.0),
+            )
             if result:
                 results.append(result)
 
@@ -104,6 +162,10 @@ class GestureConsumer(AsyncWebsocketConsumer):
         }
 
     @database_sync_to_async
+    def _get_active_session_obj(self):
+        return ClassSession.objects.filter(is_active=True).first()
+
+    @database_sync_to_async
     def _get_session_obj(self, session_id):
         try:
             return ClassSession.objects.get(pk=session_id)
@@ -111,7 +173,7 @@ class GestureConsumer(AsyncWebsocketConsumer):
             return None
 
     @database_sync_to_async
-    def _save_gesture(self, session, gesture: str, chair_rank: int = 1):
+    def _save_gesture(self, session, gesture: str, chair_rank: int, confidence: float = 0.0):
         key = f"{session.id}_{gesture}_{chair_rank}"
         now_ts = time.monotonic()
         if key in _last_gesture and (now_ts - _last_gesture[key]) < _THROTTLE_SEC:
@@ -159,6 +221,7 @@ class GestureConsumer(AsyncWebsocketConsumer):
             "chair_rank":    chair_rank,
             "student_name":  student_name,
             "gesture":       gesture,
+            "confidence":    round(confidence * 100, 1),
             "activity_mode": mode,
             "status":        rule["status"],
             "color":         rule["color"],
@@ -166,6 +229,7 @@ class GestureConsumer(AsyncWebsocketConsumer):
             "time":          now.strftime("%I:%M %p"),
             "date":          now.strftime("%B %d %Y"),
             "date_key":      str(now.date()),
+            "is_alert":      rule["status"] == "warning",
             "alert":         alert_data,
         }
 

@@ -103,24 +103,40 @@ def sessions_list(request):
     if request.method == "GET":
         sessions = ClassSession.objects.all()
         return Response(ClassSessionSerializer(sessions, many=True).data)
+
     ClassSession.objects.filter(is_active=True).update(is_active=False, ended_at=timezone.now())
-    student_names = request.data.get("student_names", {})
+
+    num_chairs = int(request.data.get("num_chairs", 20))
+    student_names_raw = request.data.get("student_names", [])
+
+    if isinstance(student_names_raw, dict):
+        student_names_list = [
+            student_names_raw.get(str(i), f"Student {i+1}")
+            for i in range(num_chairs)
+        ]
+    elif isinstance(student_names_raw, list):
+        student_names_list = student_names_raw
+    else:
+        student_names_list = [f"Student {i+1}" for i in range(num_chairs)]
+
     session = ClassSession.objects.create(
         subject_name=request.data.get("subject_name", ""),
         teacher_name=request.data.get("teacher_name", ""),
         room_number=request.data.get("room_number", ""),
         activity_mode=request.data.get("activity_mode", "Lecture"),
-        num_chairs=int(request.data.get("num_chairs", 20)),
+        num_chairs=num_chairs,
         date_key=timezone.now().date(),
     )
-    for key, name in student_names.items():
-        try:
-            idx = int(key.replace("student_", ""))
-            rank = idx + 1
-        except ValueError:
-            continue
-        if name.strip():
-            StudentRoster.objects.create(session=session, chair_rank=rank, student_name=name.strip())
+
+    for i, name in enumerate(student_names_list):
+        rank = i + 1
+        student_name = (name.strip() if isinstance(name, str) else "") or f"Student {rank}"
+        StudentRoster.objects.create(
+            session=session,
+            chair_rank=rank,
+            student_name=student_name,
+        )
+
     return Response(ClassSessionSerializer(session).data, status=201)
 
 @api_view(["GET", "PATCH", "DELETE"])
@@ -178,6 +194,7 @@ def gesture_logs(request):
         elif sort == "By Gesture":
             qs = qs.order_by("gesture", "-timestamp")
         return Response(GestureLogSerializer(qs, many=True).data)
+
     session_id = request.data.get("session_id")
     try:
         session = ClassSession.objects.get(pk=session_id, is_active=True)

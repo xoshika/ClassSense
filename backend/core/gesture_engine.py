@@ -2,6 +2,7 @@ import json
 import os
 import cv2
 import numpy as np
+from collections import deque
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 ML   = os.path.join(BASE, "ml_models")
@@ -39,44 +40,67 @@ GESTURE_COLORS = {
 
 MODE_RULES = {
     "Lecture": {
-        "Hand Raise":   {"status": "allowed", "color": "#27AE60", "label": "✅ Allowed"},
-        "Peace Sign":   {"status": "allowed", "color": "#27AE60", "label": "✅ Allowed"},
-        "Thumbs Up":    {"status": "allowed", "color": "#27AE60", "label": "✅ Allowed"},
-        "Thumbs Down":  {"status": "allowed", "color": "#27AE60", "label": "✅ Allowed"},
-        "OK Sign":      {"status": "allowed", "color": "#27AE60", "label": "✅ Allowed"},
-        "Clapping":     {"status": "allowed", "color": "#27AE60", "label": "✅ Allowed during Lecture"},
-        "Walking":      {"status": "allowed", "color": "#27AE60", "label": "✅ Allowed during Lecture"},
-        "Head Moving":  {"status": "allowed", "color": "#27AE60", "label": "✅ Allowed during Lecture"},
-        "Moving Chair": {"status": "neutral", "color": "#F39C12", "label": "⚠ Noted"},
+        "Hand Raise":   {"status": "allowed", "color": "#27AE60", "label": "Allowed"},
+        "Peace Sign":   {"status": "allowed", "color": "#27AE60", "label": "Allowed"},
+        "Thumbs Up":    {"status": "allowed", "color": "#27AE60", "label": "Allowed"},
+        "Thumbs Down":  {"status": "allowed", "color": "#27AE60", "label": "Allowed"},
+        "OK Sign":      {"status": "allowed", "color": "#27AE60", "label": "Allowed"},
+        "Clapping":     {"status": "allowed", "color": "#27AE60", "label": "Allowed during Lecture"},
+        "Walking":      {"status": "allowed", "color": "#27AE60", "label": "Allowed during Lecture"},
+        "Head Moving":  {"status": "allowed", "color": "#27AE60", "label": "Allowed during Lecture"},
+        "Moving Chair": {"status": "neutral", "color": "#F39C12", "label": "Noted"},
     },
     "Quiz": {
-        "Hand Raise":   {"status": "allowed", "color": "#27AE60", "label": "✅ Allowed"},
-        "Peace Sign":   {"status": "allowed", "color": "#27AE60", "label": "✅ Allowed"},
-        "Thumbs Up":    {"status": "allowed", "color": "#27AE60", "label": "✅ Allowed"},
-        "Thumbs Down":  {"status": "allowed", "color": "#27AE60", "label": "✅ Allowed"},
-        "OK Sign":      {"status": "allowed", "color": "#27AE60", "label": "✅ Allowed"},
-        "Clapping":     {"status": "warning", "color": "#E74C3C", "label": "🚨 Warning - Disruption during Quiz"},
-        "Walking":      {"status": "warning", "color": "#E74C3C", "label": "🚨 Warning - Not allowed during Quiz"},
-        "Head Moving":  {"status": "warning", "color": "#E74C3C", "label": "🚨 Warning - Suspicious during Quiz"},
-        "Moving Chair": {"status": "warning", "color": "#E74C3C", "label": "🚨 Warning - Disruption during Quiz"},
+        "Hand Raise":   {"status": "allowed", "color": "#27AE60", "label": "Allowed"},
+        "Peace Sign":   {"status": "allowed", "color": "#27AE60", "label": "Allowed"},
+        "Thumbs Up":    {"status": "allowed", "color": "#27AE60", "label": "Allowed"},
+        "Thumbs Down":  {"status": "allowed", "color": "#27AE60", "label": "Allowed"},
+        "OK Sign":      {"status": "allowed", "color": "#27AE60", "label": "Allowed"},
+        "Clapping":     {"status": "warning", "color": "#E74C3C", "label": "Warning - Disruption during Quiz"},
+        "Walking":      {"status": "warning", "color": "#E74C3C", "label": "Warning - Not allowed during Quiz"},
+        "Head Moving":  {"status": "warning", "color": "#E74C3C", "label": "Warning - Suspicious during Quiz"},
+        "Moving Chair": {"status": "warning", "color": "#E74C3C", "label": "Warning - Disruption during Quiz"},
     },
     "Exam": {
-        "Hand Raise":   {"status": "allowed", "color": "#27AE60", "label": "✅ Allowed - May need help"},
-        "Peace Sign":   {"status": "warning", "color": "#E74C3C", "label": "🚨 Warning - Suspicious during Exam"},
-        "Thumbs Up":    {"status": "warning", "color": "#E74C3C", "label": "🚨 Warning - Suspicious during Exam"},
-        "Thumbs Down":  {"status": "warning", "color": "#E74C3C", "label": "🚨 Warning - Suspicious during Exam"},
-        "OK Sign":      {"status": "warning", "color": "#E74C3C", "label": "🚨 Warning - Suspicious during Exam"},
-        "Clapping":     {"status": "warning", "color": "#E74C3C", "label": "🚨 Warning - Cheating risk"},
-        "Walking":      {"status": "warning", "color": "#E74C3C", "label": "🚨 Warning - Not allowed during Exam"},
-        "Head Moving":  {"status": "warning", "color": "#E74C3C", "label": "🚨 Warning - Cheating risk"},
-        "Moving Chair": {"status": "warning", "color": "#E74C3C", "label": "🚨 Warning - Disruption during Exam"},
+        "Hand Raise":   {"status": "allowed", "color": "#27AE60", "label": "Allowed - May need help"},
+        "Peace Sign":   {"status": "warning", "color": "#E74C3C", "label": "Warning - Suspicious during Exam"},
+        "Thumbs Up":    {"status": "warning", "color": "#E74C3C", "label": "Warning - Suspicious during Exam"},
+        "Thumbs Down":  {"status": "warning", "color": "#E74C3C", "label": "Warning - Suspicious during Exam"},
+        "OK Sign":      {"status": "warning", "color": "#E74C3C", "label": "Warning - Suspicious during Exam"},
+        "Clapping":     {"status": "warning", "color": "#E74C3C", "label": "Warning - Cheating risk"},
+        "Walking":      {"status": "warning", "color": "#E74C3C", "label": "Warning - Not allowed during Exam"},
+        "Head Moving":  {"status": "warning", "color": "#E74C3C", "label": "Warning - Cheating risk"},
+        "Moving Chair": {"status": "warning", "color": "#E74C3C", "label": "Warning - Disruption during Exam"},
     },
 }
+
+CONFIDENCE_THRESHOLD = 0.72
+MIN_CONFIDENCE_GAP   = 0.25
+SMOOTHING_FRAMES     = 3
+
+_frame_buffers: dict[str, deque] = {}
 
 
 def get_rule(gesture: str, mode: str) -> dict:
     rules = MODE_RULES.get(mode, MODE_RULES["Lecture"])
-    return rules.get(gesture, {"status": "neutral", "color": "#7F8C8D", "label": "📋 Noted"})
+    return rules.get(gesture, {"status": "neutral", "color": "#7F8C8D", "label": "Noted"})
+
+
+def get_chair_from_x(x_normalized: float, num_chairs: int) -> int:
+    zone = int(x_normalized * num_chairs)
+    return max(1, min(zone + 1, num_chairs))
+
+
+def smooth_gesture(session_chair_key: str, gesture: str) -> str | None:
+    if session_chair_key not in _frame_buffers:
+        _frame_buffers[session_chair_key] = deque(maxlen=SMOOTHING_FRAMES)
+    buf = _frame_buffers[session_chair_key]
+    buf.append(gesture)
+    if len(buf) < SMOOTHING_FRAMES:
+        return None
+    if all(g == gesture for g in buf):
+        return gesture
+    return None
 
 
 def _read_weights_named(weight_data: bytes, weights_manifest: list):
@@ -139,9 +163,6 @@ def load_tfjs_image_model(model_dir: str):
         has_moving = any("moving" in w.name for w in layer_weights)
 
         if has_moving:
-            non_moving = [w for w in layer_weights if "moving" not in w.name]
-            moving_w   = [w for w in layer_weights if "moving" in w.name]
-
             new_vals = []
             for w in layer_weights:
                 if "moving" not in w.name:
@@ -174,7 +195,7 @@ def load_tfjs_image_model(model_dir: str):
                 print(f"[ClassSense] Layer {layer.name} failed: {e}")
 
     print(f"[ClassSense] Image: used {trainable_idx} trainable, {moving_idx} moving stats")
-    print(f"[ClassSense] ✓ Image model loaded")
+    print(f"[ClassSense] Image model loaded")
     return model
 
 
@@ -204,7 +225,7 @@ def load_tfjs_pose_model(model_dir: str):
 
     needed = len(model.get_weights())
     model.set_weights(bin_list[:needed])
-    print(f"[ClassSense] ✓ Pose model loaded")
+    print(f"[ClassSense] Pose model loaded")
     return model
 
 
@@ -229,9 +250,9 @@ def _load_pose_landmarker():
     options = PoseLandmarkerOptions(
         base_options=BaseOptions(model_asset_path=model_path),
         running_mode=VisionRunningMode.IMAGE,
-        min_pose_detection_confidence=0.4,
-        min_pose_presence_confidence=0.4,
-        min_tracking_confidence=0.4,
+        min_pose_detection_confidence=0.5,
+        min_pose_presence_confidence=0.5,
+        min_tracking_confidence=0.5,
     )
     return PoseLandmarker.create_from_options(options)
 
@@ -245,7 +266,7 @@ class GestureEngine:
             cls._instance._initialized = False
         return cls._instance
 
-    def __init__(self, confidence_threshold: float = 0.35):
+    def __init__(self, confidence_threshold: float = CONFIDENCE_THRESHOLD):
         if self._initialized:
             return
 
@@ -266,13 +287,13 @@ class GestureEngine:
 
         try:
             self._pose_lm = _load_pose_landmarker()
-            print("[ClassSense] MediaPipe PoseLandmarker loaded ✓")
+            print("[ClassSense] MediaPipe PoseLandmarker loaded")
         except Exception as e:
             print(f"[ClassSense] MediaPipe pose landmarker failed: {e}")
 
         self._initialized = True
         ok = self.image_model is not None or self.pose_model is not None
-        print(f"[ClassSense] GestureEngine {'✓ ready' if ok else '✗ no models loaded'}")
+        print(f"[ClassSense] GestureEngine {'ready' if ok else 'no models loaded'}")
 
     @property
     def ready(self) -> bool:
@@ -280,7 +301,7 @@ class GestureEngine:
             self.image_model is not None or self.pose_model is not None
         )
 
-    def process(self, frame_bytes: bytes) -> list[str]:
+    def process(self, frame_bytes: bytes, num_chairs: int = 1, pinned_chair: int = None, session_id: int = None) -> list[dict]:
         if not self._initialized:
             return []
         try:
@@ -293,7 +314,7 @@ class GestureEngine:
             print(f"[ClassSense] Frame decode error: {e}")
             return []
 
-        found: list[str] = []
+        found: list[dict] = []
 
         if self.image_model is not None:
             try:
@@ -301,15 +322,18 @@ class GestureEngine:
                 img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 img = (img.astype(np.float32) / 127.5) - 1.0
                 img = np.expand_dims(img, axis=0)
-                preds     = self.image_model.predict(img, verbose=0)[0]
-                best_idx  = int(np.argmax(preds))
-                conf      = float(preds[best_idx])
+                preds    = self.image_model.predict(img, verbose=0)[0]
+                sorted_i = np.argsort(preds)[::-1]
+                best_idx = int(sorted_i[0])
+                sec_idx  = int(sorted_i[1])
+                conf     = float(preds[best_idx])
+                gap      = conf - float(preds[sec_idx])
                 raw_label = IMAGE_LABELS[best_idx] if best_idx < len(IMAGE_LABELS) else "none"
-                print(f"[ClassSense] Image: {raw_label} conf={conf:.3f} all={[f'{p:.2f}' for p in preds]}")
-                if conf >= self.confidence_threshold and raw_label != "none":
+                print(f"[ClassSense] Image: {raw_label} conf={conf:.3f} gap={gap:.3f}")
+                if conf >= self.confidence_threshold and gap >= MIN_CONFIDENCE_GAP and raw_label != "none":
                     display = LABEL_DISPLAY.get(raw_label, raw_label)
-                    if display != "none" and display not in found:
-                        found.append(display)
+                    if display != "none":
+                        found.append({"gesture": display, "confidence": conf, "source": "image", "x_normalized": 0.5})
             except Exception as e:
                 print(f"[ClassSense] Image predict error: {e}")
 
@@ -323,24 +347,48 @@ class GestureEngine:
                     keypoints = []
                     for point in lm:
                         keypoints.extend([point.x, point.y, point.z, point.visibility])
+
+                    nose_x = lm[0].x if lm else 0.5
+
                     kp       = np.array(keypoints, dtype=np.float32)
                     expected = self.pose_model.input_shape[-1]
                     kp = kp[:expected] if len(kp) >= expected else np.pad(kp, (0, expected - len(kp)))
-                    preds     = self.pose_model.predict(np.expand_dims(kp, 0), verbose=0)[0]
-                    best_idx  = int(np.argmax(preds))
-                    conf      = float(preds[best_idx])
+                    preds    = self.pose_model.predict(np.expand_dims(kp, 0), verbose=0)[0]
+                    sorted_i = np.argsort(preds)[::-1]
+                    best_idx = int(sorted_i[0])
+                    sec_idx  = int(sorted_i[1])
+                    conf     = float(preds[best_idx])
+                    gap      = conf - float(preds[sec_idx])
                     raw_label = POSE_LABELS[best_idx] if best_idx < len(POSE_LABELS) else "none"
-                    print(f"[ClassSense] Pose: {raw_label} conf={conf:.3f} all={[f'{p:.2f}' for p in preds]}")
-                    if conf >= self.confidence_threshold and raw_label != "none":
+                    print(f"[ClassSense] Pose: {raw_label} conf={conf:.3f} gap={gap:.3f}")
+                    if conf >= self.confidence_threshold and gap >= MIN_CONFIDENCE_GAP and raw_label != "none":
                         display = LABEL_DISPLAY.get(raw_label, raw_label)
-                        if display != "none" and display not in found:
-                            found.append(display)
+                        if display != "none":
+                            already = any(f["gesture"] == display for f in found)
+                            if not already:
+                                found.append({"gesture": display, "confidence": conf, "source": "pose", "x_normalized": nose_x})
                 else:
                     print(f"[ClassSense] Pose: no landmarks detected")
             except Exception as e:
                 print(f"[ClassSense] Pose predict error: {e}")
 
-        return found
+        results = []
+        for item in found:
+            gesture    = item["gesture"]
+            conf       = item["confidence"]
+            x_norm     = item.get("x_normalized", 0.5)
+
+            if pinned_chair is not None:
+                chair = pinned_chair
+            else:
+                chair = get_chair_from_x(x_norm, num_chairs)
+
+            smooth_key = f"{session_id}_{chair}_{gesture}"
+            smoothed   = smooth_gesture(smooth_key, gesture)
+            if smoothed:
+                results.append({"gesture": gesture, "confidence": conf, "chair_rank": chair})
+
+        return results
 
     def release(self):
         try:

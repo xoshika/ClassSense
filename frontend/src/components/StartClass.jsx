@@ -19,7 +19,7 @@ function getModeConfig(mode) {
   return MODE_CONFIG[mode] || MODE_CONFIG.Lecture
 }
 
-export default function StartClass({ selectedDate, onDateSelect, setupPrefs, updateSetupPrefs }) {
+export default function StartClass({ selectedDate, onDateSelect, setupPrefs, updateSetupPrefs, onSaveSuccess }) {
   const [showReadyDialog, setShowReadyDialog] = useState(true)
   const [classSetup, setClassSetup] = useState(null)
   const [sessionId, setSessionId] = useState(null)
@@ -46,6 +46,9 @@ export default function StartClass({ selectedDate, onDateSelect, setupPrefs, upd
     setGestureLog([])
     setDetectedGesture('')
     setShowSummary(false)
+    setClassSetup(setupData)
+    setSession({ ...setupData })
+    markDirty()
     try {
       const res = await fetch(`${API_BASE}/sessions/`, {
         method: 'POST',
@@ -62,11 +65,9 @@ export default function StartClass({ selectedDate, onDateSelect, setupPrefs, upd
       })
       const session = await res.json()
       setSessionId(session.id)
-      setClassSetup(setupData)
       setSession({ id: session.id, ...setupData })
-      markDirty()
     } catch (err) {
-      console.error('Failed to create session', err)
+      console.warn('Session API failed, continuing offline:', err)
     }
   }
 
@@ -78,9 +79,10 @@ export default function StartClass({ selectedDate, onDateSelect, setupPrefs, upd
       time: timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       date: timestamp.toLocaleDateString('en-US'),
       gesture: gestureData.gesture,
-      confidence: gestureData.confidence ? (gestureData.confidence * 100).toFixed(1) + '%' : '',
+      confidence: gestureData.confidence !== undefined ? gestureData.confidence : null,
       rankChair: gestureData.chair_rank ? `#${gestureData.chair_rank}` : `#${prev.length + 1}`,
       activityMode: classSetup?.activityMode || 'Lecture',
+      isAlert: gestureData.is_alert || false,
     }, ...prev])
   }
 
@@ -103,7 +105,8 @@ export default function StartClass({ selectedDate, onDateSelect, setupPrefs, upd
     markClean()
     setSession(null)
     setShowSummary(false)
-  }, [markClean, setSession])
+    if (onSaveSuccess) onSaveSuccess()
+  }, [markClean, setSession, onSaveSuccess])
 
   const handleStartNewClass = () => {
     markClean(); setSession(null); setClassSetup(null); setShowSummary(false)
@@ -151,10 +154,11 @@ export default function StartClass({ selectedDate, onDateSelect, setupPrefs, upd
     )
   }
 
-  const totalGestures    = gestureLog.length
+  const totalGestures     = gestureLog.length
   const totalChairRanking = new Set(gestureLog.map(g => g.rankChair)).size
-  const alertCount       = gestureLog.filter(g => g.status === 'warning').length
-  const modeConfig       = getModeConfig(classSetup.activityMode)
+  const alertCount        = gestureLog.filter(g => g.isAlert).length
+  const modeConfig        = getModeConfig(classSetup.activityMode)
+  const timerDuration     = classSetup.timerDuration || 0
 
   return (
     <>
@@ -284,6 +288,7 @@ export default function StartClass({ selectedDate, onDateSelect, setupPrefs, upd
         .sc-log-row.new { background: rgba(59,130,246,0.04); }
         .sc-log-row td { padding: 8px 12px; font-size: 11px; color: #475569; font-variant-numeric: tabular-nums; }
         .sc-log-gesture { text-transform: capitalize; font-weight: 600; color: #334155; }
+        .sc-conf-pill { font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 4px; background: rgba(59,130,246,0.1); color: #3b82f6; margin-left: 4px; }
         .sc-stats-card {
           background: white;
           border-radius: 14px;
@@ -326,6 +331,7 @@ export default function StartClass({ selectedDate, onDateSelect, setupPrefs, upd
           letter-spacing: 0.2px;
         }
         .sc-end-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(239,68,68,0.4); }
+        @keyframes lc-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.6;transform:scale(1.3)} }
       `}</style>
 
       <div className="sc-root">
@@ -334,6 +340,11 @@ export default function StartClass({ selectedDate, onDateSelect, setupPrefs, upd
             <div style={{ width: 4, height: 20, background: 'linear-gradient(180deg,#3b82f6,#60a5fa)', borderRadius: 4 }} />
             <span className="sc-topbar-title">Start Class</span>
             <span className="sc-topbar-subject">Subject: {classSetup.subjectName || 'Machine Learning'}</span>
+            {timerDuration > 0 && (
+              <span style={{ fontSize: 11, color: '#f59e0b', fontWeight: 700, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.25)', padding: '3px 10px', borderRadius: 6 }}>
+                ⏱ {timerDuration}m Timer
+              </span>
+            )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <button className="sc-datetime-btn" onClick={() => setShowCalendar(!showCalendar)}>
@@ -367,6 +378,8 @@ export default function StartClass({ selectedDate, onDateSelect, setupPrefs, upd
                     mode={(classSetup?.activityMode || 'Lecture').toLowerCase()}
                     numSeats={classSetup?.numChairs || 20}
                     onGestureDetected={handleGestureDetected}
+                    timerDuration={timerDuration}
+                    onTimerEnd={handleEndClass}
                   />
                 </div>
                 <div className="sc-camera-footer">
@@ -423,15 +436,20 @@ export default function StartClass({ selectedDate, onDateSelect, setupPrefs, upd
                     <table className="sc-log-table">
                       <thead className="sc-log-thead">
                         <tr>
-                          {['Time', 'Date', 'Gesture', 'Rank', 'Mode'].map(h => <th key={h}>{h}</th>)}
+                          {['Time', 'Gesture', 'Conf', 'Rank', 'Mode'].map(h => <th key={h}>{h}</th>)}
                         </tr>
                       </thead>
                       <tbody>
                         {gestureLog.map((row, i) => (
                           <tr key={i} className={`sc-log-row ${i === 0 ? 'new' : ''}`}>
                             <td>{row.time}</td>
-                            <td>{row.date}</td>
-                            <td className="sc-log-gesture">{row.gesture.replace(/_/g, ' ')}</td>
+                            <td className="sc-log-gesture">{(row.gesture || '').replace(/_/g, ' ')}</td>
+                            <td>
+                              {row.confidence !== null && row.confidence !== undefined
+                                ? <span className="sc-conf-pill">{typeof row.confidence === 'number' ? row.confidence.toFixed(1) : row.confidence}%</span>
+                                : <span style={{ color: '#cbd5e1', fontSize: 10 }}>—</span>
+                              }
+                            </td>
                             <td>{row.rankChair}</td>
                             <td>{row.activityMode}</td>
                           </tr>
@@ -447,13 +465,13 @@ export default function StartClass({ selectedDate, onDateSelect, setupPrefs, upd
                 <div className="sc-stats-grid">
                   {[
                     { label: 'Total Gestures', value: totalGestures },
-                    { label: 'Gesture Detected', value: totalGestures },
-                    { label: 'Chair Rankings', value: totalChairRanking },
+                    { label: 'Chairs Active', value: totalChairRanking },
                     { label: 'Alerts', value: alertCount },
+                    { label: 'Timer', value: timerDuration > 0 ? `${timerDuration}m` : 'Off' },
                   ].map(({ label, value }) => (
                     <div key={label} className="sc-stat-item">
                       <div className="sc-stat-item-label">{label}</div>
-                      <div className="sc-stat-item-value">{value}</div>
+                      <div className="sc-stat-item-value" style={{ fontSize: label === 'Timer' ? 16 : 22 }}>{value}</div>
                     </div>
                   ))}
                 </div>

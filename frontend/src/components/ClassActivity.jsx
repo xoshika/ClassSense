@@ -154,7 +154,6 @@ function StudentRankCard({ student, index }) {
       onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.boxShadow = '0 12px 32px rgba(0,0,0,0.1)' }}
       onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = index < 3 ? `0 4px 20px ${index === 0 ? 'rgba(245,158,11,0.12)' : 'rgba(0,0,0,0.06)'}` : '0 2px 8px rgba(0,0,0,0.04)' }}
     >
-      {/* Header */}
       <div style={{
         background: index < 3 ? `linear-gradient(135deg, ${index === 0 ? '#fef3c7,#fde68a' : index === 1 ? '#f1f5f9,#e2e8f0' : '#fdf4ec,#fde8d4'})` : '#f8fafc',
         padding: '14px 16px 12px',
@@ -185,7 +184,6 @@ function StudentRankCard({ student, index }) {
         </div>
       </div>
 
-      {/* Stats row */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', padding: '10px 16px', gap: 8, borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
         {[
           { label: 'Alerts', value: student.alerts, color: student.alerts > 0 ? '#ef4444' : '#10b981' },
@@ -199,7 +197,6 @@ function StudentRankCard({ student, index }) {
         ))}
       </div>
 
-      {/* Gesture breakdown */}
       <div style={{ padding: '10px 16px 14px' }}>
         <div style={{ fontSize: 9, color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>Gesture Breakdown</div>
         {gestureEntries.length === 0 ? (
@@ -226,7 +223,6 @@ function StudentRankCard({ student, index }) {
         )}
       </div>
 
-      {/* Alert badge */}
       {student.alerts > 0 && (
         <div style={{
           margin: '0 16px 14px',
@@ -258,7 +254,7 @@ export default function ClassActivity({ selectedDate }) {
   const [sort, setSort] = useState('Newest')
   const [filterOpen, setFilterOpen] = useState(false)
   const [sortOpen, setSortOpen] = useState(false)
-  const [activeTab, setActiveTab] = useState('log') // 'log' | 'rankings'
+  const [activeTab, setActiveTab] = useState('log')
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
@@ -269,6 +265,12 @@ export default function ClassActivity({ selectedDate }) {
       .then(data => { setLogs(data); setLoading(false) })
       .catch(() => setLoading(false))
   }, [selectedDate])
+
+  useEffect(() => {
+    const close = () => { setFilterOpen(false); setSortOpen(false) }
+    document.addEventListener('click', close)
+    return () => document.removeEventListener('click', close)
+  }, [])
 
   const filteredLogs = logs
     .filter(log => {
@@ -301,6 +303,8 @@ export default function ClassActivity({ selectedDate }) {
           display: flex; align-items:center; gap:16px;
           flex-shrink:0; border-bottom:1px solid rgba(255,255,255,0.06);
           height: 54px;
+          position: relative;
+          z-index: 10;
         }
         .ca-tabs { display:flex; gap:4px; }
         .ca-tab {
@@ -324,10 +328,10 @@ export default function ClassActivity({ selectedDate }) {
         }
         .ca-dropdown-btn:hover { background:rgba(59,130,246,0.15); border-color:rgba(59,130,246,0.3); }
         .ca-dropdown-menu {
-          position:absolute; top:calc(100% + 6px); left:0;
+          position:fixed;
           background:#1e293b; border:1px solid rgba(255,255,255,0.1);
           border-radius:10px; box-shadow:0 16px 40px rgba(0,0,0,0.4);
-          z-index:100; min-width:140px; overflow:hidden; padding:4px;
+          z-index:9999; min-width:140px; overflow:hidden; padding:4px;
         }
         .ca-dropdown-item {
           width:100%; text-align:left; padding:7px 12px; font-size:12px;
@@ -423,12 +427,12 @@ export default function ClassActivity({ selectedDate }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span className="ca-toolbar-label">Filter</span>
                 <div className="ca-dropdown-wrap">
-                  <button className="ca-dropdown-btn" onClick={() => { setFilterOpen(!filterOpen); setSortOpen(false) }}>
+                  <button className="ca-dropdown-btn" onClick={e => { e.stopPropagation(); setFilterOpen(v => !v); setSortOpen(false) }}>
                     <span>{filter}</span>
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M6 9l6 6 6-6" /></svg>
                   </button>
                   {filterOpen && (
-                    <div className="ca-dropdown-menu">
+                    <div className="ca-dropdown-menu" onClick={e => e.stopPropagation()}>
                       {filterOptions.map(opt => (
                         <button key={opt} className={`ca-dropdown-item ${filter === opt ? 'active' : ''}`} onClick={() => { setFilter(opt); setFilterOpen(false) }}>{opt}</button>
                       ))}
@@ -440,12 +444,12 @@ export default function ClassActivity({ selectedDate }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span className="ca-toolbar-label">Sort</span>
                 <div className="ca-dropdown-wrap">
-                  <button className="ca-dropdown-btn" onClick={() => { setSortOpen(!sortOpen); setFilterOpen(false) }}>
+                  <button className="ca-dropdown-btn" onClick={e => { e.stopPropagation(); setSortOpen(v => !v); setFilterOpen(false) }}>
                     <span>{sort}</span>
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M6 9l6 6 6-6" /></svg>
                   </button>
                   {sortOpen && (
-                    <div className="ca-dropdown-menu">
+                    <div className="ca-dropdown-menu" onClick={e => e.stopPropagation()}>
                       {sortOptions.map(opt => (
                         <button key={opt} className={`ca-dropdown-item ${sort === opt ? 'active' : ''}`} onClick={() => { setSort(opt); setSortOpen(false) }}>{opt}</button>
                       ))}
@@ -465,7 +469,6 @@ export default function ClassActivity({ selectedDate }) {
         </div>
 
         <main className="ca-body">
-          {/* Summary bar */}
           <div className="ca-summary-bar">
             {[
               { label: 'Total Logs', value: logs.length, color: '#3b82f6', bg: 'rgba(59,130,246,0.1)', icon: (

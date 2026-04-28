@@ -1,38 +1,313 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useGestureStream } from '../hooks/useWebSocket';
+import ActivityRulesModal from './ActivityRulesModal';
 
 function getGestureStatus(gesture, mode) {
   const rules = {
     lesson:  { allowed: ['raised_hand','peace_sign'], warning: ['wave','clap'], alert: [] },
     lecture: { allowed: ['raised_hand','peace_sign','thumbs_up','thumbs_down','ok_sign','clapping','walking','head_moving'], warning: [], alert: [] },
-    quiz:    { allowed: ['raised_hand'], warning: [], alert: ['peace_sign','thumbs_up','thumbs_down','clap','wave','ok_sign','clapping','walking','head_moving'] },
-    exam:    { allowed: [], warning: ['raised_hand'], alert: ['peace_sign','thumbs_up','thumbs_down','clap','wave','ok_sign','clapping','walking','head_moving'] },
+    quiz:    { allowed: ['raised_hand','peace_sign','thumbs_up','thumbs_down','ok_sign'], warning: [], alert: ['clapping','walking','head_moving','moving_chair'] },
+    exam:    { allowed: ['raised_hand'], warning: [], alert: ['peace_sign','thumbs_up','thumbs_down','ok_sign','clapping','walking','head_moving','moving_chair'] },
   }[mode?.toLowerCase()] || { allowed: [], warning: [], alert: [] };
-  const g = gesture?.toLowerCase().replace(/ /g, '_');
-  if (rules.allowed.includes(g)) return { color: '#10b981', label: 'Allowed',  bg: 'rgba(16,185,129,0.85)' };
-  if (rules.warning.includes(g)) return { color: '#f59e0b', label: 'Warning',  bg: 'rgba(245,158,11,0.85)' };
-  if (rules.alert.includes(g))   return { color: '#ef4444', label: 'Alert',    bg: 'rgba(239,68,68,0.85)' };
-  return                                 { color: '#3b82f6', label: 'Detected', bg: 'rgba(59,130,246,0.85)' };
+  const g = (gesture || '').toLowerCase().replace(/ /g, '_');
+  if (rules.allowed.includes(g)) return { color: '#10b981', label: 'Allowed',  bg: 'rgba(16,185,129,0.85)', isViolation: false };
+  if (rules.warning.includes(g)) return { color: '#f59e0b', label: 'Warning',  bg: 'rgba(245,158,11,0.85)', isViolation: false };
+  if (rules.alert.includes(g))   return { color: '#ef4444', label: 'VIOLATION', bg: 'rgba(239,68,68,0.85)', isViolation: true };
+  return                                 { color: '#3b82f6', label: 'Detected', bg: 'rgba(59,130,246,0.85)', isViolation: false };
 }
+
+const VIOLATION_RULES_INFO = {
+  quiz: {
+    forbidden: ['Clapping', 'Walking', 'Head Moving', 'Moving Chair'],
+    reason: 'These gestures may indicate disruption or cheating during a Quiz.',
+  },
+  exam: {
+    forbidden: ['Peace Sign', 'Thumbs Up', 'Thumbs Down', 'OK Sign', 'Clapping', 'Walking', 'Head Moving', 'Moving Chair'],
+    reason: 'Only Hand Raise is permitted during an Exam. All other gestures indicate potential cheating.',
+  },
+  lecture: { forbidden: [], reason: '' },
+  lesson:  { forbidden: [], reason: '' },
+};
 
 const fmt = (g) => (g || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 
-export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', onGestureDetected = null }) {
+function playAmbulanceSound() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const duration = 2.0;
+    const bufferSize = ctx.sampleRate * duration;
+    const buf = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      const t = i / ctx.sampleRate;
+      const freq = 600 + 300 * Math.sin(2 * Math.PI * 2 * t);
+      const envelope = Math.min(1, t * 5) * Math.min(1, (duration - t) * 5);
+      data[i] = Math.sin(2 * Math.PI * freq * t) * 0.7 * envelope;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.start();
+    src.stop(ctx.currentTime + duration);
+  } catch (e) {}
+}
+
+function formatTime(seconds) {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function ViolationModal({ violation, onDismiss, mode }) {
+  const [visible, setVisible] = useState(false);
+  const ruleInfo = VIOLATION_RULES_INFO[mode?.toLowerCase()] || { forbidden: [], reason: '' };
+
+  useEffect(() => {
+    if (violation) {
+      setTimeout(() => setVisible(true), 10);
+    } else {
+      setVisible(false);
+    }
+  }, [violation]);
+
+  if (!violation) return null;
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 99999,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(8px)',
+      transition: 'opacity 0.25s ease',
+      opacity: visible ? 1 : 0,
+    }}>
+      <div style={{
+        background: 'linear-gradient(135deg, #1a0a0a 0%, #2d0f0f 100%)',
+        border: '2px solid rgba(239,68,68,0.6)',
+        borderRadius: 20,
+        padding: '32px 36px',
+        width: 480,
+        maxWidth: '90vw',
+        boxShadow: '0 0 60px rgba(239,68,68,0.4), 0 24px 64px rgba(0,0,0,0.6)',
+        transform: visible ? 'scale(1) translateY(0)' : 'scale(0.88) translateY(20px)',
+        transition: 'transform 0.3s cubic-bezier(0.34,1.56,0.64,1)',
+        position: 'relative',
+        overflow: 'hidden',
+      }}>
+        <div style={{
+          position: 'absolute', inset: 0, borderRadius: 20, pointerEvents: 'none',
+          background: 'repeating-linear-gradient(45deg, rgba(239,68,68,0.03) 0px, rgba(239,68,68,0.03) 1px, transparent 1px, transparent 8px)',
+        }} />
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20 }}>
+          <div style={{
+            width: 52, height: 52, borderRadius: 14,
+            background: 'linear-gradient(135deg,#ef4444,#dc2626)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: '0 0 20px rgba(239,68,68,0.5)',
+            animation: 'vm-pulse 0.8s ease-in-out infinite',
+            flexShrink: 0,
+          }}>
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+              <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#ef4444', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 3 }}>
+              ⚠ Gesture Violation Detected
+            </div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: 'white', letterSpacing: -0.4, lineHeight: 1.2 }}>
+              {violation.studentName || `Student`} — Chair #{violation.chairRank}
+            </div>
+          </div>
+        </div>
+
+        <div style={{
+          background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)',
+          borderRadius: 12, padding: '14px 18px', marginBottom: 16,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.6 }}>Gesture Type</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#ef4444', background: 'rgba(239,68,68,0.2)', padding: '2px 10px', borderRadius: 20, border: '1px solid rgba(239,68,68,0.4)' }}>
+              VIOLATION
+            </div>
+          </div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: 'white', marginBottom: 4 }}>
+            {fmt(violation.gesture)}
+          </div>
+          <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', fontWeight: 500 }}>
+            Detected during <span style={{ color: '#f59e0b', fontWeight: 700 }}>{violation.mode}</span> mode at {violation.time}
+          </div>
+        </div>
+
+        {ruleInfo.forbidden.length > 0 && (
+          <div style={{
+            background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
+            borderRadius: 10, padding: '12px 16px', marginBottom: 16,
+          }}>
+            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 }}>
+              Not Allowed During {violation.mode}
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+              {ruleInfo.forbidden.map(g => (
+                <span key={g} style={{
+                  fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 20,
+                  background: fmt(violation.gesture) === g ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.06)',
+                  color: fmt(violation.gesture) === g ? '#ef4444' : 'rgba(255,255,255,0.5)',
+                  border: fmt(violation.gesture) === g ? '1px solid rgba(239,68,68,0.5)' : '1px solid rgba(255,255,255,0.08)',
+                }}>
+                  {fmt(violation.gesture) === g ? '✗ ' : ''}{g}
+                </span>
+              ))}
+            </div>
+            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', lineHeight: 1.5 }}>
+              {ruleInfo.reason}
+            </div>
+          </div>
+        )}
+
+        <button
+          onClick={onDismiss}
+          style={{
+            width: '100%', padding: '12px', borderRadius: 12, border: 'none',
+            background: 'linear-gradient(135deg,#ef4444,#dc2626)',
+            color: 'white', fontWeight: 700, fontSize: 14, cursor: 'pointer',
+            fontFamily: 'inherit', letterSpacing: 0.3,
+            boxShadow: '0 4px 16px rgba(239,68,68,0.4)',
+            transition: 'all 0.18s ease',
+          }}
+          onMouseOver={e => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = '0 6px 20px rgba(239,68,68,0.5)'; }}
+          onMouseOut={e => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = '0 4px 16px rgba(239,68,68,0.4)'; }}
+        >
+          Acknowledge & Dismiss
+        </button>
+
+        <style>{`
+          @keyframes vm-pulse {
+            0%,100%{box-shadow:0 0 20px rgba(239,68,68,0.5)}
+            50%{box-shadow:0 0 40px rgba(239,68,68,0.9),0 0 60px rgba(239,68,68,0.3)}
+          }
+        `}</style>
+      </div>
+    </div>
+  );
+}
+
+function NotificationBell({ notifications, onClear }) {
+  const [open, setOpen] = useState(false);
+  const unread = notifications.filter(n => !n.read).length;
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        onClick={() => setOpen(v => !v)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '7px 12px', borderRadius: 9, border: 'none', cursor: 'pointer',
+          background: unread > 0 ? 'rgba(239,68,68,0.12)' : 'rgba(255,255,255,0.65)',
+          backdropFilter: 'blur(12px)',
+          border: unread > 0 ? '1px solid rgba(239,68,68,0.3)' : '1px solid rgba(255,255,255,0.4)',
+          color: unread > 0 ? '#ef4444' : '#64748b',
+          fontFamily: 'inherit', fontSize: 12, fontWeight: 700,
+          transition: 'all 0.18s ease', position: 'relative',
+        }}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+          style={{ animation: unread > 0 ? 'bell-ring 0.5s ease 0s 2' : 'none' }}>
+          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+        </svg>
+        Alerts
+        {unread > 0 && (
+          <span style={{
+            background: '#ef4444', color: 'white', borderRadius: 20,
+            fontSize: 10, fontWeight: 700, padding: '1px 6px', minWidth: 18, textAlign: 'center',
+            boxShadow: '0 0 8px rgba(239,68,68,0.5)',
+          }}>{unread}</span>
+        )}
+      </button>
+
+      {open && (
+        <div style={{
+          position: 'absolute', top: '110%', right: 0, width: 320, zIndex: 9999,
+          background: 'white', borderRadius: 14, boxShadow: '0 16px 48px rgba(0,0,0,0.16)',
+          border: '1px solid rgba(0,0,0,0.07)', overflow: 'hidden',
+        }}>
+          <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>Violation Alerts</div>
+            {notifications.length > 0 && (
+              <button onClick={onClear} style={{ fontSize: 11, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>
+                Clear all
+              </button>
+            )}
+          </div>
+          <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+            {notifications.length === 0 ? (
+              <div style={{ padding: '24px 16px', textAlign: 'center', color: '#94a3b8', fontSize: 12 }}>
+                No violations recorded
+              </div>
+            ) : notifications.map((n, i) => (
+              <div key={i} style={{
+                padding: '10px 16px', borderBottom: '1px solid #f8fafc',
+                borderLeft: `3px solid ${n.isViolation ? '#ef4444' : '#f59e0b'}`,
+                background: n.read ? 'white' : 'rgba(239,68,68,0.02)',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#0f172a', marginBottom: 2 }}>
+                      {n.isViolation ? '🚨' : '⚠️'} {n.studentName} — Chair #{n.chairRank}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#64748b', fontWeight: 500 }}>
+                      {fmt(n.gesture)} during {n.mode}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 10, color: '#94a3b8', flexShrink: 0, marginLeft: 8 }}>{n.time}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <style>{`
+        @keyframes bell-ring {
+          0%,100%{transform:rotate(0)} 25%{transform:rotate(-15deg)} 75%{transform:rotate(15deg)}
+        }
+      `}</style>
+    </div>
+  );
+}
+
+export default function LiveCamera({
+  sessionId,
+  numSeats = 20,
+  mode = 'lesson',
+  onGestureDetected = null,
+  timerDuration = 0,
+  onTimerEnd = null,
+}) {
   const videoRef         = useRef(null);
   const canvasRef        = useRef(null);
   const modalVideoRef    = useRef(null);
   const frameIntervalRef = useRef(null);
   const streamRef        = useRef(null);
   const onGestureRef     = useRef(onGestureDetected);
+  const timerRef         = useRef(null);
 
   useEffect(() => { onGestureRef.current = onGestureDetected; }, [onGestureDetected]);
 
-  const [isRunning, setIsRunning]       = useState(false);
-  const [currentGesture, setCurrentGesture] = useState(null);
-  const [isModalOpen, setIsModalOpen]   = useState(false);
-  const [liveTime, setLiveTime]         = useState('');
+  const [isRunning, setIsRunning]             = useState(false);
+  const [currentGesture, setCurrentGesture]   = useState(null);
+  const [isModalOpen, setIsModalOpen]         = useState(false);
+  const [liveTime, setLiveTime]               = useState('');
+  const [showRulesModal, setShowRulesModal]   = useState(false);
+  const [pinnedChair, setPinnedChair]         = useState(null);
+  const [isLocked, setIsLocked]               = useState(false);
+  const [timerSeconds, setTimerSeconds]       = useState(timerDuration * 60);
+  const [timerRunning, setTimerRunning]       = useState(false);
+  const [timesUp, setTimesUp]                 = useState(false);
+  const [violationAlert, setViolationAlert]   = useState(null);
+  const [notifications, setNotifications]     = useState([]);
 
-  const { gestures, isConnected, sendFrame } = useGestureStream(sessionId, numSeats);
+  const { gestures, isConnected, sendFrame, sendMessage } = useGestureStream(sessionId, numSeats);
 
   useEffect(() => {
     const tick = () => {
@@ -49,8 +324,72 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
       const latest = gestures[0];
       setCurrentGesture(latest);
       if (onGestureRef.current) onGestureRef.current(latest);
+
+      const status = getGestureStatus(latest.gesture, mode);
+
+      if (status.isViolation || latest.is_alert) {
+        const studentName = latest.student_name || `Student ${latest.chair_rank || 1}`;
+        const chairRank = latest.chair_rank || 1;
+        const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const modeLabel = (mode || 'lecture').charAt(0).toUpperCase() + (mode || 'lecture').slice(1);
+
+        const newNotif = {
+          studentName,
+          chairRank,
+          gesture: latest.gesture,
+          mode: modeLabel,
+          time: timeStr,
+          isViolation: true,
+          read: false,
+        };
+
+        setViolationAlert({
+          studentName,
+          chairRank,
+          gesture: latest.gesture,
+          mode: modeLabel,
+          time: timeStr,
+        });
+
+        setNotifications(prev => [newNotif, ...prev.slice(0, 49)]);
+        playAmbulanceSound();
+      }
     }
-  }, [gestures]);
+  }, [gestures, mode]);
+
+  useEffect(() => {
+    if (!isConnected) return;
+    sendMessage({ type: 'config', num_seats: numSeats, session_id: sessionId, pinned_chair: pinnedChair });
+  }, [isConnected, numSeats, sessionId]);
+
+  useEffect(() => {
+    if (!isConnected) return;
+    sendMessage({ type: 'pin_chair', chair_rank: pinnedChair });
+  }, [pinnedChair, isConnected]);
+
+  useEffect(() => {
+    if (!isConnected) return;
+    sendMessage({ type: 'lock_detection', locked: isLocked });
+  }, [isLocked, isConnected]);
+
+  useEffect(() => {
+    if (!timerRunning) return;
+    timerRef.current = setInterval(() => {
+      setTimerSeconds(prev => {
+        if (prev <= 1) {
+          clearInterval(timerRef.current);
+          setTimerRunning(false);
+          setTimesUp(true);
+          setIsLocked(true);
+          playAmbulanceSound();
+          if (onTimerEnd) onTimerEnd();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timerRef.current);
+  }, [timerRunning]);
 
   const captureAndSendFrame = useCallback(() => {
     const video  = videoRef.current;
@@ -63,6 +402,10 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
   }, [sendFrame]);
 
   const startCamera = useCallback(async () => {
+    setShowRulesModal(true);
+  }, []);
+
+  const doStartCamera = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 1280 }, height: { ideal: 720 } },
@@ -73,17 +416,23 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
         await videoRef.current.play();
       }
       setIsRunning(true);
+      if (timerDuration > 0) {
+        setTimerSeconds(timerDuration * 60);
+        setTimerRunning(true);
+      }
     } catch {
       alert('Could not access camera. Please check permissions.');
     }
-  }, []);
+  }, [timerDuration]);
 
   const stopCamera = useCallback(() => {
     if (frameIntervalRef.current) { clearInterval(frameIntervalRef.current); frameIntervalRef.current = null; }
+    if (timerRef.current) clearInterval(timerRef.current);
     if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
     if (videoRef.current)      videoRef.current.srcObject = null;
     if (modalVideoRef.current) modalVideoRef.current.srcObject = null;
     setIsRunning(false);
+    setTimerRunning(false);
     setCurrentGesture(null);
   }, []);
 
@@ -105,9 +454,14 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
     }
   }, [isModalOpen]);
 
+  const handlePinChair = (rank) => setPinnedChair(prev => prev === rank ? null : rank);
+
+  const timerPct = timerDuration > 0 ? (timerSeconds / (timerDuration * 60)) * 100 : 100;
+  const timerColor = timerPct > 50 ? '#10b981' : timerPct > 20 ? '#f59e0b' : '#ef4444';
   const statusInfo    = currentGesture ? getGestureStatus(currentGesture.gesture, mode) : null;
   const aiStatusColor = isConnected ? '#10b981' : '#ef4444';
   const aiStatusText  = isConnected ? 'AI Monitoring Active' : 'Not Connected';
+  const modeLabel     = (mode || 'lesson').charAt(0).toUpperCase() + (mode || 'lesson').slice(1);
 
   return (
     <>
@@ -123,15 +477,15 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
         .lc-video { width:100%; height:100%; object-fit:cover; display:block; }
         .lc-overlay-top {
           position:absolute; top:0; left:0; right:0; padding:10px 12px;
-          display:flex; align-items:center; justify-content:space-between;
-          background:linear-gradient(180deg,rgba(0,0,0,0.6) 0%,transparent 100%);
+          display:flex; align-items:center; justify-content:space-between; gap:8px;
+          background:linear-gradient(180deg,rgba(0,0,0,0.65) 0%,transparent 100%);
         }
         .lc-live-badge {
           display:flex; align-items:center; gap:6px;
           background:rgba(239,68,68,0.9); backdrop-filter:blur(6px);
           color:white; padding:4px 10px; border-radius:20px;
           font-weight:700; font-size:11px; letter-spacing:0.5px;
-          border:1px solid rgba(255,255,255,0.15);
+          border:1px solid rgba(255,255,255,0.15); flex-shrink:0;
         }
         .lc-live-dot { width:7px; height:7px; background:white; border-radius:50%; animation:lc-livepulse 1.4s ease-in-out infinite; }
         .lc-camera-off-badge {
@@ -144,8 +498,17 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
           background:rgba(0,0,0,0.55); backdrop-filter:blur(8px);
           border:1px solid rgba(255,255,255,0.1);
           color:white; padding:4px 10px; border-radius:20px; font-size:10px; font-weight:600;
+          flex-shrink:0;
         }
         .lc-ai-dot { width:6px; height:6px; border-radius:50%; }
+        .lc-timer-overlay {
+          position:absolute; top:10px; left:50%; transform:translateX(-50%);
+          background:rgba(0,0,0,0.7); backdrop-filter:blur(8px);
+          border-radius:20px; padding:5px 14px;
+          display:flex; align-items:center; gap:8px;
+          border:1px solid rgba(255,255,255,0.1);
+        }
+        .lc-timer-text { font-size:14px; font-weight:700; font-variant-numeric:tabular-nums; }
         .lc-overlay-bottom {
           position:absolute; bottom:0; left:0; right:0; padding:10px 12px;
           display:flex; align-items:flex-end; justify-content:space-between;
@@ -156,6 +519,10 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
           font-weight:700; font-size:12px; backdrop-filter:blur(6px);
           border:1px solid rgba(255,255,255,0.15);
         }
+        .lc-conf-badge {
+          font-size:10px; font-weight:600; padding:2px 7px; border-radius:6px;
+          background:rgba(255,255,255,0.2); margin-left:6px;
+        }
         .lc-time {
           background:rgba(0,0,0,0.5); backdrop-filter:blur(6px);
           color:rgba(255,255,255,0.9); padding:4px 10px; border-radius:6px;
@@ -163,13 +530,21 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
           border:1px solid rgba(255,255,255,0.08);
         }
         .lc-expand-hint {
-          position:absolute; top:10px; left:50%; transform:translateX(-50%);
+          position:absolute; bottom:48px; left:50%; transform:translateX(-50%);
           background:rgba(0,0,0,0.4); backdrop-filter:blur(6px);
-          color:rgba(255,255,255,0.5); font-size:10px;
+          color:rgba(255,255,255,0.4); font-size:10px;
           padding:3px 10px; border-radius:20px; pointer-events:none;
           border:1px solid rgba(255,255,255,0.08);
         }
-        .lc-controls { display:flex; align-items:center; gap:10px; }
+        .lc-timesup-banner {
+          position:absolute; inset:0; display:flex; flex-direction:column;
+          align-items:center; justify-content:center;
+          background:rgba(239,68,68,0.85); backdrop-filter:blur(4px);
+          z-index:10;
+        }
+        .lc-timesup-title { font-size:36px; font-weight:700; color:white; letter-spacing:-1px; margin-bottom:8px; }
+        .lc-timesup-sub { font-size:14px; color:rgba(255,255,255,0.8); font-weight:500; }
+        .lc-controls { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
         .lc-cam-btn {
           display:flex; align-items:center; gap:7px;
           padding:9px 18px; border:none; border-radius:9px;
@@ -181,6 +556,14 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
         .lc-cam-btn.start:hover { transform:translateY(-1px); box-shadow:0 6px 18px rgba(59,130,246,0.45); }
         .lc-cam-btn.stop { background:linear-gradient(135deg,#ef4444,#dc2626); color:white; box-shadow:0 4px 14px rgba(239,68,68,0.3); }
         .lc-cam-btn.stop:hover { transform:translateY(-1px); box-shadow:0 6px 18px rgba(239,68,68,0.4); }
+        .lc-lock-btn {
+          display:flex; align-items:center; gap:6px;
+          padding:8px 14px; border-radius:9px; border:none;
+          font-size:11px; font-weight:700; cursor:pointer;
+          font-family:'DM Sans','Segoe UI',sans-serif; transition:all 0.18s ease;
+        }
+        .lc-lock-btn.unlocked { background:rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.3); color:#f59e0b; }
+        .lc-lock-btn.locked { background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.3); color:#ef4444; }
         .lc-conn-badge {
           display:flex; align-items:center; gap:6px; padding:7px 12px;
           background:rgba(255,255,255,0.65); backdrop-filter:blur(12px);
@@ -188,13 +571,41 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
           font-size:12px; font-weight:600; box-shadow:0 2px 10px rgba(0,0,0,0.07);
         }
         .lc-conn-dot { width:7px; height:7px; border-radius:50%; }
+        .lc-chair-panel {
+          background:rgba(255,255,255,0.65); backdrop-filter:blur(14px);
+          border:1px solid rgba(255,255,255,0.45); border-radius:14px;
+          padding:14px; box-shadow:0 4px 20px rgba(0,0,0,0.07);
+        }
+        .lc-chair-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+        .lc-chair-title { font-size:12px; font-weight:700; color:#0f172a; }
+        .lc-chair-hint { font-size:10px; color:#94a3b8; font-weight:500; }
+        .lc-chair-grid { display:flex; flex-wrap:wrap; gap:6px; }
+        .lc-chair-btn {
+          display:flex; flex-direction:column; align-items:center; justify-content:center;
+          width:44px; height:44px; border-radius:9px; border:none; cursor:pointer;
+          font-size:11px; font-weight:700; transition:all 0.18s ease;
+          font-family:'DM Sans','Segoe UI',sans-serif; position:relative;
+        }
+        .lc-chair-btn.auto { background:rgba(248,250,252,0.8); color:#64748b; border:1px solid rgba(0,0,0,0.08); }
+        .lc-chair-btn.auto:hover { background:rgba(59,130,246,0.08); color:#3b82f6; border-color:rgba(59,130,246,0.2); }
+        .lc-chair-btn.pinned { background:linear-gradient(135deg,#3b82f6,#2563eb); color:white; box-shadow:0 3px 10px rgba(59,130,246,0.35); }
+        .lc-chair-pin-dot {
+          position:absolute; top:3px; right:3px;
+          width:6px; height:6px; border-radius:50%; background:#10b981;
+          box-shadow:0 0 6px #10b981;
+        }
+        .lc-zone-bar {
+          display:flex; height:8px; border-radius:4px; overflow:hidden; margin-top:8px;
+          border:1px solid rgba(0,0,0,0.06);
+        }
+        .lc-zone-seg { flex:1; transition:background 0.3s ease; }
         .lc-alerts-card {
           background:rgba(255,255,255,0.65); backdrop-filter:blur(14px);
           border:1px solid rgba(255,255,255,0.45); border-radius:14px;
           padding:14px; box-shadow:0 4px 20px rgba(0,0,0,0.07);
         }
         .lc-alerts-header { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
-        .lc-alerts-title { font-size:12px; font-weight:700; color:#0f172a; letter-spacing:0.2px; }
+        .lc-alerts-title { font-size:12px; font-weight:700; color:#0f172a; }
         .lc-alerts-count {
           font-size:10px; background:rgba(59,130,246,0.1); color:#3b82f6;
           padding:2px 8px; border-radius:20px; font-weight:700;
@@ -210,8 +621,11 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
         }
         .lc-alert-item:hover { background:rgba(255,255,255,0.75); }
         .lc-alert-item:last-child { margin-bottom:0; }
-        .lc-alert-info { font-size:12px; color:#334155; font-weight:500; }
-        .lc-alert-time { font-size:10px; color:#94a3b8; }
+        .lc-alert-left { display:flex; flex-direction:column; gap:2px; }
+        .lc-alert-info { font-size:12px; color:#334155; font-weight:600; }
+        .lc-alert-meta { font-size:10px; color:#94a3b8; display:flex; gap:6px; align-items:center; }
+        .lc-alert-conf { font-size:10px; font-weight:700; padding:1px 6px; border-radius:4px; }
+        .lc-alert-time { font-size:10px; color:#94a3b8; flex-shrink:0; }
         .lc-no-alerts {
           font-size:12px; color:#94a3b8; text-align:center; padding:16px 0;
           display:flex; flex-direction:column; align-items:center; gap:6px;
@@ -236,31 +650,92 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
         }
         .lc-modal-close:hover { transform:scale(1.1); }
         @keyframes lc-livepulse { 0%,100%{opacity:1} 50%{opacity:0.2} }
+        @keyframes lc-timesup-pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.04)} }
+        .lc-violation-flash {
+          animation: violation-flash 0.5s ease;
+        }
+        @keyframes violation-flash {
+          0%{box-shadow:0 0 0 0 rgba(239,68,68,0.8)}
+          50%{box-shadow:0 0 0 12px rgba(239,68,68,0.3)}
+          100%{box-shadow:0 0 0 0 rgba(239,68,68,0)}
+        }
       `}</style>
+
+      {showRulesModal && (
+        <ActivityRulesModal
+          mode={modeLabel}
+          onConfirm={() => { setShowRulesModal(false); doStartCamera(); }}
+        />
+      )}
+
+      <ViolationModal
+        violation={violationAlert}
+        mode={mode}
+        onDismiss={() => {
+          setViolationAlert(null);
+          setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+        }}
+      />
 
       <div className="lc-container">
         <div className="lc-video-wrap" onClick={() => setIsModalOpen(true)}>
           <video ref={videoRef} autoPlay playsInline muted className="lc-video" />
+
+          {timesUp && (
+            <div className="lc-timesup-banner" style={{ animation: 'lc-timesup-pulse 1s ease-in-out infinite' }}>
+              <div className="lc-timesup-title">⏰ Time's Up!</div>
+              <div className="lc-timesup-sub">Gesture detection is now locked. You can still view the camera.</div>
+            </div>
+          )}
+
           <div className="lc-overlay-top">
             {isRunning
               ? <div className="lc-live-badge"><span className="lc-live-dot" />LIVE</div>
               : <div className="lc-camera-off-badge">Camera Off</div>
             }
+            {timerDuration > 0 && isRunning && (
+              <div className="lc-timer-overlay">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={timerColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                </svg>
+                <span className="lc-timer-text" style={{ color: timerColor }}>{formatTime(timerSeconds)}</span>
+                {isLocked && !timesUp && (
+                  <span style={{ fontSize: 10, color: '#ef4444', fontWeight: 700 }}>LOCKED</span>
+                )}
+              </div>
+            )}
             <div className="lc-ai-badge">
               <div className="lc-ai-dot" style={{ background: aiStatusColor, boxShadow: `0 0 6px ${aiStatusColor}` }} />
-              {aiStatusText}
+              {isLocked ? 'Detection Locked' : aiStatusText}
             </div>
           </div>
-          <div className="lc-expand-hint">Click to expand</div>
+
+          {!timesUp && <div className="lc-expand-hint">Click to expand</div>}
+
           <div className="lc-overlay-bottom">
             {currentGesture && statusInfo && (
               <div className="lc-gesture-chip" style={{ background: statusInfo.bg }}>
-                {fmt(currentGesture.gesture)} — {statusInfo.label}
+                {statusInfo.isViolation && '🚨 '}{fmt(currentGesture.gesture)} — {statusInfo.label}
+                {currentGesture.confidence !== undefined && (
+                  <span className="lc-conf-badge">{currentGesture.confidence}%</span>
+                )}
               </div>
             )}
             <div className="lc-time">{liveTime}</div>
           </div>
         </div>
+
+        {timerDuration > 0 && isRunning && (
+          <div style={{ height: 6, background: '#f1f5f9', borderRadius: 4, overflow: 'hidden' }}>
+            <div style={{
+              height: '100%', borderRadius: 4,
+              background: `linear-gradient(90deg, ${timerColor}, ${timerColor}cc)`,
+              width: `${timerPct}%`,
+              transition: 'width 1s linear, background 0.3s ease',
+              boxShadow: `0 0 8px ${timerColor}66`,
+            }} />
+          </div>
+        )}
 
         <canvas ref={canvasRef} style={{ display: 'none' }} />
 
@@ -274,11 +749,107 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
               : <><svg width="12" height="12" viewBox="0 0 24 24" fill="white"><polygon points="5 3 19 12 5 21 5 3" /></svg>Start Camera</>
             }
           </button>
+
+          {isRunning && (
+            <button
+              className={`lc-lock-btn ${isLocked ? 'locked' : 'unlocked'}`}
+              onClick={() => setIsLocked(v => !v)}
+            >
+              {isLocked
+                ? <><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>Unlock Detection</>
+                : <><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>Lock Detection</>
+              }
+            </button>
+          )}
+
           <div className="lc-conn-badge">
             <div className="lc-conn-dot" style={{ background: isConnected ? '#10b981' : '#ef4444', boxShadow: isConnected ? '0 0 6px #10b981' : 'none' }} />
             <span style={{ color: isConnected ? '#065f46' : '#991b1b' }}>
               {isConnected ? 'Connected' : 'Disconnected'}
             </span>
+          </div>
+
+          <NotificationBell
+            notifications={notifications}
+            onClear={() => setNotifications([])}
+          />
+
+          {pinnedChair !== null && (
+            <div style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 12px', background:'rgba(59,130,246,0.1)', border:'1px solid rgba(59,130,246,0.25)', borderRadius:8, fontSize:11, fontWeight:700, color:'#3b82f6' }}>
+              📌 Monitoring Chair #{pinnedChair}
+              <button onClick={() => setPinnedChair(null)} style={{ background:'none', border:'none', cursor:'pointer', color:'#94a3b8', fontSize:14, padding:0, lineHeight:1 }}>×</button>
+            </div>
+          )}
+        </div>
+
+        <div className="lc-chair-panel">
+          <div className="lc-chair-header">
+            <div>
+              <div className="lc-chair-title">Chair Monitor Panel</div>
+              <div className="lc-chair-hint">
+                {pinnedChair ? `📌 Pinned to Chair #${pinnedChair} — click to unpin` : 'Auto zone detection active — click a chair to pin'}
+              </div>
+            </div>
+            {pinnedChair !== null && (
+              <button
+                onClick={() => setPinnedChair(null)}
+                style={{ fontSize:11, fontWeight:700, color:'#94a3b8', background:'rgba(0,0,0,0.05)', border:'1px solid rgba(0,0,0,0.08)', borderRadius:7, padding:'4px 10px', cursor:'pointer' }}
+              >
+                Clear Pin
+              </button>
+            )}
+          </div>
+          <div className="lc-chair-grid">
+            {Array.from({ length: numSeats }, (_, i) => i + 1).map(rank => {
+              const isPinned = pinnedChair === rank;
+              const recentGesture = gestures.find(g => g.chair_rank === rank);
+              const hasViolation = recentGesture && getGestureStatus(recentGesture.gesture, mode).isViolation;
+              return (
+                <button
+                  key={rank}
+                  className={`lc-chair-btn ${isPinned ? 'pinned' : 'auto'}`}
+                  onClick={() => handlePinChair(rank)}
+                  title={`Chair #${rank}${recentGesture ? ` — ${recentGesture.gesture}` : ''}`}
+                  style={hasViolation ? { border: '2px solid #ef4444', background: isPinned ? undefined : 'rgba(239,68,68,0.08)' } : {}}
+                >
+                  {isPinned && <span className="lc-chair-pin-dot" />}
+                  {hasViolation && !isPinned && (
+                    <span style={{ position:'absolute', top:2, left:2, fontSize:8 }}>🚨</span>
+                  )}
+                  <span style={{ fontSize: 9, opacity: 0.6, lineHeight: 1 }}>Ch</span>
+                  <span style={{ fontSize: 13, lineHeight: 1 }}>{rank}</span>
+                  {recentGesture && (
+                    <span style={{ fontSize: 7, opacity: 0.7, lineHeight: 1 }}>
+                      {recentGesture.gesture?.slice(0, 4)}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="lc-zone-bar" style={{ marginTop: 10 }}>
+            {Array.from({ length: numSeats }, (_, i) => i + 1).map(rank => {
+              const isActive = gestures.some(g => g.chair_rank === rank);
+              const isPinned = pinnedChair === rank;
+              const hasViolation = gestures.some(g => g.chair_rank === rank && getGestureStatus(g.gesture, mode).isViolation);
+              return (
+                <div
+                  key={rank}
+                  className="lc-zone-seg"
+                  style={{
+                    background: hasViolation ? '#ef4444' : isPinned ? '#3b82f6' : isActive ? '#10b981' : 'rgba(0,0,0,0.06)',
+                    borderRight: '1px solid rgba(255,255,255,0.3)',
+                  }}
+                />
+              );
+            })}
+          </div>
+          <div style={{ display:'flex', gap:16, marginTop:6, fontSize:10, color:'#94a3b8', fontWeight:600 }}>
+            <span style={{ display:'flex', alignItems:'center', gap:4 }}><span style={{ width:8, height:8, borderRadius:2, background:'#10b981', display:'inline-block' }} />Active</span>
+            <span style={{ display:'flex', alignItems:'center', gap:4 }}><span style={{ width:8, height:8, borderRadius:2, background:'#3b82f6', display:'inline-block' }} />Pinned</span>
+            <span style={{ display:'flex', alignItems:'center', gap:4 }}><span style={{ width:8, height:8, borderRadius:2, background:'#ef4444', display:'inline-block' }} />Violation</span>
+            <span style={{ display:'flex', alignItems:'center', gap:4 }}><span style={{ width:8, height:8, borderRadius:2, background:'rgba(0,0,0,0.1)', display:'inline-block' }} />Idle</span>
           </div>
         </div>
 
@@ -287,7 +858,7 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" />
             </svg>
-            <span className="lc-alerts-title">Recent Alerts</span>
+            <span className="lc-alerts-title">Recent Detections</span>
             {gestures.length > 0 && <span className="lc-alerts-count">{gestures.length}</span>}
           </div>
           {gestures.length === 0 ? (
@@ -295,16 +866,38 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="rgba(148,163,184,0.5)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
               </svg>
-              No alerts yet
+              No gestures detected yet
             </div>
           ) : (
-            <div style={{ maxHeight: 160, overflowY: 'auto' }}>
-              {gestures.slice(0, 8).map((g, i) => {
+            <div style={{ maxHeight: 200, overflowY: 'auto' }}>
+              {gestures.slice(0, 10).map((g, i) => {
                 const info = getGestureStatus(g.gesture, mode);
                 const ts = g.time || liveTime;
+                const conf = g.confidence !== undefined ? `${g.confidence}%` : null;
+                const studentLabel = g.student_name || `Student ${g.chair_rank || 1}`;
                 return (
-                  <div key={i} className="lc-alert-item" style={{ borderLeftColor: info.color }}>
-                    <span className="lc-alert-info">Chair {g.chair_rank || g.seat || 1} — {fmt(g.gesture)}</span>
+                  <div key={i} className="lc-alert-item" style={{
+                    borderLeftColor: info.color,
+                    background: info.isViolation ? 'rgba(239,68,68,0.04)' : 'rgba(255,255,255,0.5)',
+                  }}>
+                    <div className="lc-alert-left">
+                      <span className="lc-alert-info">
+                        {info.isViolation && '🚨 '}{studentLabel} — Chair #{g.chair_rank || 1} — {fmt(g.gesture)}
+                      </span>
+                      <div className="lc-alert-meta">
+                        <span style={{ color: info.color, fontWeight: 700, fontSize: 10 }}>{info.label}</span>
+                        {info.isViolation && (
+                          <span style={{ color: '#ef4444', fontSize: 10, fontWeight: 600 }}>
+                            · {fmt(g.gesture)} not allowed during {(mode||'').charAt(0).toUpperCase()+(mode||'').slice(1)}
+                          </span>
+                        )}
+                        {conf && (
+                          <span className="lc-alert-conf" style={{ background: `${info.color}22`, color: info.color }}>
+                            {conf}
+                          </span>
+                        )}
+                      </div>
+                    </div>
                     <span className="lc-alert-time">{ts}</span>
                   </div>
                 );
@@ -329,7 +922,10 @@ export default function LiveCamera({ sessionId, numSeats = 20, mode = 'lesson', 
               <div className="lc-overlay-bottom">
                 {currentGesture && statusInfo && (
                   <div className="lc-gesture-chip" style={{ background: statusInfo.bg, fontSize: 14, padding: '7px 16px' }}>
-                    {fmt(currentGesture.gesture)} — Seat {currentGesture.chair_rank || currentGesture.seat || 1}
+                    {statusInfo.isViolation && '🚨 '}{fmt(currentGesture.gesture)} — Seat {currentGesture.chair_rank || 1}
+                    {currentGesture.confidence !== undefined && (
+                      <span className="lc-conf-badge">{currentGesture.confidence}%</span>
+                    )}
                   </div>
                 )}
                 <div className="lc-time" style={{ fontSize: 13 }}>{liveTime}</div>

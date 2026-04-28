@@ -8,7 +8,7 @@ export default function ClassSetupForm({ onStartClass, onCancel, selectedDate, o
 
   const [classSetup, setClassSetup] = useState({
     subjectName: '', teacherName: '', roomNumber: '',
-    activityMode: 'Lecture', numChairs: 12, studentNames: {}
+    activityMode: 'Lecture', numChairs: 12, studentNames: {}, timerDuration: 0
   })
 
   useEffect(() => {
@@ -16,14 +16,14 @@ export default function ClassSetupForm({ onStartClass, onCancel, selectedDate, o
       const namesArray = setupPrefs.student_names || Array.from({ length: setupPrefs.num_chairs || 12 }, (_, i) => `Student ${i + 1}`)
       const namesObj = {}
       namesArray.forEach((name, idx) => { namesObj[`student_${idx}`] = name })
-      setClassSetup({
+      setClassSetup(prev => ({
+        ...prev,
         subjectName: setupPrefs.subject_name || '',
         teacherName: setupPrefs.teacher_name || '',
         roomNumber: setupPrefs.room_number || '',
-        activityMode: 'Lecture',
         numChairs: setupPrefs.num_chairs || 12,
         studentNames: namesObj
-      })
+      }))
     }
   }, [setupPrefs])
 
@@ -40,7 +40,12 @@ export default function ClassSetupForm({ onStartClass, onCancel, selectedDate, o
   }, [])
 
   const handleInputChange = (field, value) => setClassSetup(prev => ({ ...prev, [field]: value }))
-  const handleActivityMode = (mode) => setClassSetup(prev => ({ ...prev, activityMode: mode }))
+
+  const handleActivityMode = (mode) => setClassSetup(prev => ({
+    ...prev,
+    activityMode: mode,
+    timerDuration: mode === 'Lecture' ? 0 : prev.timerDuration
+  }))
 
   const handleAddChair = () => setClassSetup(prev => ({ ...prev, numChairs: Math.min(prev.numChairs + 1, 50) }))
   const handleRemoveChair = () => setClassSetup(prev => {
@@ -59,8 +64,20 @@ export default function ClassSetupForm({ onStartClass, onCancel, selectedDate, o
     for (let i = 0; i < classSetup.numChairs; i++) {
       namesArray.push(classSetup.studentNames[`student_${i}`] || `Student ${i + 1}`)
     }
-    updateSetupPrefs({ num_chairs: classSetup.numChairs, subject_name: classSetup.subjectName, teacher_name: classSetup.teacherName, room_number: classSetup.roomNumber, student_names: namesArray })
-    onStartClass(classSetup)
+    try {
+      if (typeof updateSetupPrefs === 'function') {
+        updateSetupPrefs({
+          num_chairs: classSetup.numChairs,
+          subject_name: classSetup.subjectName,
+          teacher_name: classSetup.teacherName,
+          room_number: classSetup.roomNumber,
+          student_names: namesArray
+        })
+      }
+    } catch (e) {
+      console.warn('updateSetupPrefs failed:', e)
+    }
+    onStartClass({ ...classSetup, studentNames: namesArray })
   }
 
   const MODE_CONFIG = {
@@ -68,6 +85,8 @@ export default function ClassSetupForm({ onStartClass, onCancel, selectedDate, o
     Quiz:    { color: '#f59e0b', bg: 'rgba(245,158,11,0.12)', border: 'rgba(245,158,11,0.3)', activeBg: 'linear-gradient(135deg,#f59e0b,#d97706)' },
     Exam:    { color: '#ef4444', bg: 'rgba(239,68,68,0.12)',  border: 'rgba(239,68,68,0.3)',  activeBg: 'linear-gradient(135deg,#ef4444,#dc2626)' },
   }
+
+  const showTimer = classSetup.activityMode !== 'Lecture'
 
   return (
     <>
@@ -97,69 +116,71 @@ export default function ClassSetupForm({ onStartClass, onCancel, selectedDate, o
           max-width: 860px; margin: 0 auto;
           background: rgba(255,255,255,0.7);
           backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
-          border: 1px solid rgba(255,255,255,0.6);
-          border-radius: 20px;
+          border: 1px solid rgba(255,255,255,0.6); border-radius: 20px;
           box-shadow: 0 8px 40px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.9);
           padding: 32px;
         }
         .csf-card-title { font-size: 17px; font-weight: 700; color: #0f172a; letter-spacing: -0.4px; margin-bottom: 28px; }
         .csf-section-title {
-          font-size: 11px; font-weight: 700; color: #64748b;
-          letter-spacing: 0.8px; text-transform: uppercase;
-          margin-bottom: 14px; margin-top: 24px;
-          display: flex; align-items: center; gap: 8px;
+          font-size: 11px; font-weight: 700; color: #64748b; letter-spacing: 0.8px; text-transform: uppercase;
+          margin-bottom: 14px; margin-top: 24px; display: flex; align-items: center; gap: 8px;
         }
-        .csf-section-title::after {
-          content: ''; flex: 1; height: 1px;
-          background: rgba(0,0,0,0.07);
-        }
+        .csf-section-title::after { content: ''; flex: 1; height: 1px; background: rgba(0,0,0,0.07); }
         .csf-input-group { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; }
-        .csf-input-group-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
         .csf-field { display: flex; flex-direction: column; gap: 6px; }
         .csf-label { font-size: 11px; font-weight: 700; color: #64748b; letter-spacing: 0.4px; text-transform: uppercase; }
         .csf-input {
-          padding: 10px 14px;
-          background: rgba(255,255,255,0.6);
-          backdrop-filter: blur(8px);
-          border: 1px solid rgba(0,0,0,0.09);
-          border-radius: 10px;
-          font-size: 13px; color: #0f172a;
-          font-family: 'DM Sans','Segoe UI',sans-serif;
-          transition: all 0.18s ease; outline: none;
+          padding: 10px 14px; background: rgba(255,255,255,0.6); backdrop-filter: blur(8px);
+          border: 1px solid rgba(0,0,0,0.09); border-radius: 10px; font-size: 13px; color: #0f172a;
+          font-family: 'DM Sans','Segoe UI',sans-serif; transition: all 0.18s ease; outline: none;
           box-shadow: inset 0 1px 3px rgba(0,0,0,0.04);
         }
         .csf-input::placeholder { color: rgba(148,163,184,0.7); }
         .csf-input:focus {
-          border-color: rgba(59,130,246,0.5);
-          background: rgba(255,255,255,0.85);
+          border-color: rgba(59,130,246,0.5); background: rgba(255,255,255,0.85);
           box-shadow: 0 0 0 3px rgba(59,130,246,0.1), inset 0 1px 3px rgba(0,0,0,0.03);
         }
         .csf-mode-btns { display: flex; gap: 10px; }
         .csf-mode-btn {
-          padding: 9px 22px; border-radius: 10px;
-          font-size: 13px; font-weight: 600;
-          cursor: pointer; transition: all 0.18s ease;
-          font-family: 'DM Sans','Segoe UI',sans-serif;
+          padding: 9px 22px; border-radius: 10px; font-size: 13px; font-weight: 600;
+          cursor: pointer; transition: all 0.18s ease; font-family: 'DM Sans','Segoe UI',sans-serif;
           border: 1px solid transparent;
         }
         .csf-mode-btn.inactive {
-          background: rgba(255,255,255,0.6);
-          backdrop-filter: blur(8px);
-          border-color: rgba(0,0,0,0.09);
-          color: #475569;
-          box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+          background: rgba(255,255,255,0.6); backdrop-filter: blur(8px);
+          border-color: rgba(0,0,0,0.09); color: #475569; box-shadow: 0 2px 6px rgba(0,0,0,0.05);
         }
         .csf-mode-btn.inactive:hover { background: rgba(255,255,255,0.85); transform: translateY(-1px); }
+        .csf-timer-card {
+          background: rgba(245,158,11,0.06); border: 1px solid rgba(245,158,11,0.2);
+          border-radius: 12px; padding: 16px 18px; margin-top: 14px;
+        }
+        .csf-timer-label { font-size: 11px; font-weight: 700; color: #92400e; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+        .csf-timer-presets { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+        .csf-timer-preset {
+          padding: 6px 14px; border-radius: 8px; border: none; cursor: pointer;
+          font-size: 12px; font-weight: 700; transition: all 0.18s ease;
+          font-family: 'DM Sans','Segoe UI',sans-serif;
+        }
+        .csf-timer-preset.active { background: linear-gradient(135deg,#f59e0b,#d97706); color: white; box-shadow: 0 3px 10px rgba(245,158,11,0.3); }
+        .csf-timer-preset.inactive { background: rgba(255,255,255,0.7); color: #92400e; border: 1px solid rgba(245,158,11,0.2); }
+        .csf-timer-preset.inactive:hover { background: rgba(245,158,11,0.1); }
+        .csf-timer-custom { display: flex; align-items: center; gap: 10px; }
+        .csf-timer-input {
+          width: 80px; padding: 8px 12px; background: rgba(255,255,255,0.7);
+          border: 1px solid rgba(245,158,11,0.3); border-radius: 8px; font-size: 13px;
+          font-weight: 700; color: #0f172a; font-family: 'DM Sans','Segoe UI',sans-serif;
+          outline: none; text-align: center;
+        }
+        .csf-timer-input:focus { border-color: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,0.1); }
         .csf-chair-row { display: flex; align-items: center; gap: 14px; }
         .csf-chair-label { font-size: 13px; color: #475569; font-weight: 500; }
         .csf-counter { display: flex; align-items: center; gap: 10px; }
         .csf-counter-btn {
-          width: 34px; height: 34px; border-radius: 9px;
-          background: rgba(255,255,255,0.6); backdrop-filter: blur(8px);
-          border: 1px solid rgba(0,0,0,0.09); color: #334155;
-          font-size: 18px; font-weight: 700; cursor: pointer;
-          display: flex; align-items: center; justify-content: center;
-          transition: all 0.18s ease; box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+          width: 34px; height: 34px; border-radius: 9px; background: rgba(255,255,255,0.6);
+          backdrop-filter: blur(8px); border: 1px solid rgba(0,0,0,0.09); color: #334155;
+          font-size: 18px; font-weight: 700; cursor: pointer; display: flex; align-items: center;
+          justify-content: center; transition: all 0.18s ease; box-shadow: 0 2px 6px rgba(0,0,0,0.05);
         }
         .csf-counter-btn:hover:not(:disabled) { background: rgba(255,255,255,0.85); transform: translateY(-1px); }
         .csf-counter-btn:disabled { opacity: 0.35; cursor: not-allowed; }
@@ -169,24 +190,17 @@ export default function ClassSetupForm({ onStartClass, onCancel, selectedDate, o
         .csf-divider { height: 1px; background: rgba(0,0,0,0.06); margin: 22px 0; }
         .csf-actions { display: flex; gap: 10px; }
         .csf-btn-cancel {
-          display: flex; align-items: center; gap: 7px;
-          padding: 11px 22px; border-radius: 10px;
-          font-size: 13px; font-weight: 700;
-          background: rgba(239,68,68,0.1); backdrop-filter: blur(8px);
-          border: 1px solid rgba(239,68,68,0.25); color: #ef4444;
-          cursor: pointer; font-family: 'DM Sans','Segoe UI',sans-serif;
-          transition: all 0.18s ease;
+          display: flex; align-items: center; gap: 7px; padding: 11px 22px; border-radius: 10px;
+          font-size: 13px; font-weight: 700; background: rgba(239,68,68,0.1); backdrop-filter: blur(8px);
+          border: 1px solid rgba(239,68,68,0.25); color: #ef4444; cursor: pointer;
+          font-family: 'DM Sans','Segoe UI',sans-serif; transition: all 0.18s ease;
         }
         .csf-btn-cancel:hover { background: rgba(239,68,68,0.18); transform: translateY(-1px); }
         .csf-btn-start {
-          display: flex; align-items: center; gap: 7px;
-          padding: 11px 22px; border-radius: 10px;
-          font-size: 13px; font-weight: 700;
-          background: linear-gradient(135deg,#3b82f6,#2563eb);
-          border: none; color: white;
-          cursor: pointer; font-family: 'DM Sans','Segoe UI',sans-serif;
-          transition: all 0.18s ease;
-          box-shadow: 0 4px 14px rgba(59,130,246,0.35);
+          display: flex; align-items: center; gap: 7px; padding: 11px 22px; border-radius: 10px;
+          font-size: 13px; font-weight: 700; background: linear-gradient(135deg,#3b82f6,#2563eb);
+          border: none; color: white; cursor: pointer; font-family: 'DM Sans','Segoe UI',sans-serif;
+          transition: all 0.18s ease; box-shadow: 0 4px 14px rgba(59,130,246,0.35);
         }
         .csf-btn-start:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(59,130,246,0.45); }
         .csf-hint { font-size: 11px; color: #94a3b8; margin-bottom: 12px; }
@@ -246,23 +260,63 @@ export default function ClassSetupForm({ onStartClass, onCancel, selectedDate, o
                   <button
                     key={mode}
                     onClick={() => handleActivityMode(mode)}
-                    className="csf-mode-btn"
+                    className={`csf-mode-btn ${isActive ? '' : 'inactive'}`}
                     style={isActive ? {
-                      background: cfg.activeBg,
-                      color: 'white',
-                      border: 'none',
+                      background: cfg.activeBg, color: 'white', border: 'none',
                       boxShadow: `0 4px 14px ${cfg.color}40`,
                     } : {}}
                   >
                     {mode === 'Lecture' && '📖 '}
                     {mode === 'Quiz' && '📝 '}
                     {mode === 'Exam' && '🔒 '}
-                    {isActive ? '' : ''}
                     {mode}
                   </button>
                 )
               })}
             </div>
+
+            {showTimer && (
+              <div className="csf-timer-card">
+                <div className="csf-timer-label">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#92400e" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                  </svg>
+                  Session Timer ({classSetup.activityMode})
+                </div>
+                <div className="csf-timer-presets">
+                  <button
+                    className={`csf-timer-preset ${classSetup.timerDuration === 0 ? 'active' : 'inactive'}`}
+                    onClick={() => handleInputChange('timerDuration', 0)}
+                    style={classSetup.timerDuration === 0 ? { background: 'linear-gradient(135deg,#64748b,#475569)' } : {}}
+                  >
+                    No Timer
+                  </button>
+                  {[5, 10, 15, 20, 30, 45, 60].map(min => (
+                    <button
+                      key={min}
+                      className={`csf-timer-preset ${classSetup.timerDuration === min ? 'active' : 'inactive'}`}
+                      onClick={() => handleInputChange('timerDuration', min)}
+                    >
+                      {min}m
+                    </button>
+                  ))}
+                </div>
+                <div className="csf-timer-custom">
+                  <span style={{ fontSize: 12, color: '#92400e', fontWeight: 600 }}>Custom:</span>
+                  <input
+                    type="number" min="1" max="180" className="csf-timer-input" placeholder="min"
+                    value={classSetup.timerDuration || ''}
+                    onChange={e => handleInputChange('timerDuration', parseInt(e.target.value) || 0)}
+                  />
+                  <span style={{ fontSize: 12, color: '#92400e' }}>minutes</span>
+                  {classSetup.timerDuration > 0 && (
+                    <span style={{ fontSize: 11, color: '#64748b', background: 'rgba(245,158,11,0.1)', padding: '4px 10px', borderRadius: 6, fontWeight: 600 }}>
+                      Timer will auto-lock detection when time's up
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
 
             <div className="csf-divider" />
             <div className="csf-section-title">Chair Ranking Setup</div>
@@ -283,12 +337,10 @@ export default function ClassSetupForm({ onStartClass, onCancel, selectedDate, o
                 <div key={i}>
                   <div className="csf-student-label">Chair Rank {i + 1}</div>
                   <input
-                    type="text"
-                    placeholder={`Student ${i + 1}`}
+                    type="text" placeholder={`Student ${i + 1}`}
                     value={classSetup.studentNames[`student_${i}`] || ''}
                     onChange={e => handleStudentNameChange(`student_${i}`, e.target.value)}
-                    className="csf-input"
-                    style={{ fontSize: 12 }}
+                    className="csf-input" style={{ fontSize: 12 }}
                   />
                 </div>
               ))}

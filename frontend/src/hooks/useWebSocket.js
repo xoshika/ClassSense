@@ -1,13 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 
 export const useWebSocket = (url, options = {}) => {
-  const {
-    onMessage,
-    onError,
-    onOpen,
-    onClose,
-    autoConnect = true,
-  } = options;
+  const { onMessage, onError, onOpen, onClose, autoConnect = true } = options;
 
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
@@ -31,7 +25,6 @@ export const useWebSocket = (url, options = {}) => {
 
   const connect = useCallback(() => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
-
     try {
       wsRef.current = new WebSocket(url);
 
@@ -63,9 +56,7 @@ export const useWebSocket = (url, options = {}) => {
         if (onCloseRef.current) onCloseRef.current();
         if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
           reconnectAttemptsRef.current += 1;
-          reconnectTimeoutRef.current = setTimeout(() => {
-            connect();
-          }, RECONNECT_DELAY);
+          reconnectTimeoutRef.current = setTimeout(() => connect(), RECONNECT_DELAY);
         }
       };
     } catch (err) {
@@ -108,31 +99,32 @@ export const useGestureStream = (sessionId, numSeats = 20) => {
   const [stats, setStats] = useState({});
   const sendRef = useRef(null);
 
-  const { isConnected, lastMessage, send } = useWebSocket(
-    `ws://localhost:8000/ws/gesture/${sessionId}/`,
-    {
-      onOpen: () => {
-        if (sendRef.current) {
-          sendRef.current({
-            type: "config",
-            num_seats: numSeats,
-            session_id: sessionId,
-          });
-        }
-      },
-      onMessage: (data) => {
-        if (data.type === "gesture_detected") {
-          const gestureData = data.gestures?.[0] || data.data || data;
-          setGestures((prev) => [gestureData, ...prev.slice(0, 49)]);
-          setStats((prev) => ({
-            ...prev,
-            [gestureData.gesture]: (prev[gestureData.gesture] || 0) + 1,
-          }));
-        }
-      },
-      autoConnect: !!sessionId && !isNaN(Number(sessionId)) && Number(sessionId) > 0,
-    }
-  );
+  const wsUrl = sessionId
+    ? `ws://localhost:8000/ws/gesture/${sessionId}/`
+    : `ws://localhost:8000/ws/gesture/0/`;
+
+  const { isConnected, lastMessage, send } = useWebSocket(wsUrl, {
+    autoConnect: true,
+    onOpen: () => {
+      if (sendRef.current) {
+        sendRef.current({
+          type: "config",
+          num_seats: numSeats,
+          session_id: sessionId || 0,
+        });
+      }
+    },
+    onMessage: (data) => {
+      if (data.type === "gesture_detected") {
+        const gestureData = data.gestures?.[0] || data.data || data;
+        setGestures((prev) => [gestureData, ...prev.slice(0, 49)]);
+        setStats((prev) => ({
+          ...prev,
+          [gestureData.gesture]: (prev[gestureData.gesture] || 0) + 1,
+        }));
+      }
+    },
+  });
 
   useEffect(() => {
     sendRef.current = send;
@@ -142,14 +134,16 @@ export const useGestureStream = (sessionId, numSeats = 20) => {
     (imageData) => {
       send({
         type: "frame",
-        session_id: sessionId,
+        session_id: sessionId || 0,
         frame: imageData,
       });
     },
     [send, sessionId]
   );
 
-  return { gestures, stats, isConnected, sendFrame, lastMessage };
+  const sendMessage = useCallback((msg) => { send(msg); }, [send]);
+
+  return { gestures, stats, isConnected, sendFrame, sendMessage, lastMessage };
 };
 
 export default useWebSocket;
