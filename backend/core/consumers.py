@@ -90,7 +90,7 @@ class GestureConsumer(AsyncWebsocketConsumer):
             return
 
         loop = asyncio.get_event_loop()
-        gesture_results: list[dict] = await loop.run_in_executor(
+        engine_result: dict = await loop.run_in_executor(
             None,
             lambda: engine.process(
                 frame_bytes,
@@ -99,7 +99,25 @@ class GestureConsumer(AsyncWebsocketConsumer):
                 session_id=session_id,
             )
         )
-        print(f"[ClassSense] Gestures found: {gesture_results}")
+
+        persons: list[dict]  = engine_result.get("persons", [])
+        gesture_results: list[dict] = engine_result.get("gestures", [])
+
+        print(f"[ClassSense] Persons: {len(persons)}  Gestures: {gesture_results}")
+
+        await self._send({
+            "type": "landmarks_update",
+            "persons": [
+                {
+                    "chair_rank": p["chair_rank"],
+                    "bbox":       p.get("bbox"),
+                    "landmarks":  p.get("landmarks", []),
+                    "gesture":    p.get("gesture"),
+                    "confidence": p.get("confidence"),
+                }
+                for p in persons
+            ],
+        })
 
         if not gesture_results:
             await self._send({"type": "no_gesture"})
@@ -116,20 +134,20 @@ class GestureConsumer(AsyncWebsocketConsumer):
         if session is None:
             await self._send({"type": "gesture_detected", "gestures": [
                 {
-                    "log_id": None,
-                    "chair_rank": item.get("chair_rank", 1),
-                    "student_name": f"Student {item.get('chair_rank', 1)}",
-                    "gesture": item["gesture"],
-                    "confidence": round(item.get("confidence", 0) * 100, 1),
+                    "log_id":        None,
+                    "chair_rank":    item.get("chair_rank", 1),
+                    "student_name":  f"Student {item.get('chair_rank', 1)}",
+                    "gesture":       item["gesture"],
+                    "confidence":    round(item.get("confidence", 0), 1),
                     "activity_mode": "Lecture",
-                    "status": "neutral",
-                    "color": "#7F8C8D",
-                    "label": "Detected",
-                    "time": timezone.now().strftime("%I:%M %p"),
-                    "date": timezone.now().strftime("%B %d %Y"),
-                    "date_key": str(timezone.now().date()),
-                    "is_alert": False,
-                    "alert": None,
+                    "status":        "neutral",
+                    "color":         "#7F8C8D",
+                    "label":         "Detected",
+                    "time":          timezone.now().strftime("%I:%M %p"),
+                    "date":          timezone.now().strftime("%B %d %Y"),
+                    "date_key":      str(timezone.now().date()),
+                    "is_alert":      False,
+                    "alert":         None,
                 }
                 for item in gesture_results
             ]})
@@ -210,10 +228,10 @@ class GestureConsumer(AsyncWebsocketConsumer):
                 severity="warning",
             )
             alert_data = {
-                "id": alert.id,
-                "message": alert.message,
+                "id":       alert.id,
+                "message":  alert.message,
                 "severity": alert.severity,
-                "time": alert.timestamp.strftime("%I:%M %p"),
+                "time":     alert.timestamp.strftime("%I:%M %p"),
             }
 
         return {
@@ -221,7 +239,7 @@ class GestureConsumer(AsyncWebsocketConsumer):
             "chair_rank":    chair_rank,
             "student_name":  student_name,
             "gesture":       gesture,
-            "confidence":    round(confidence * 100, 1),
+            "confidence":    round(confidence, 1),
             "activity_mode": mode,
             "status":        rule["status"],
             "color":         rule["color"],

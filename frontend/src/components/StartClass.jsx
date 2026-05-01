@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import ClassSetupForm from './ClassSetupForm'
 import DateCalendar from './DateCalendar'
@@ -30,6 +30,14 @@ export default function StartClass({ selectedDate, onDateSelect, setupPrefs, upd
   const [liveDateTime, setLiveDateTime] = useState('')
   const { setSession, markDirty, markClean } = useSession()
 
+  const sessionIdRef = useRef(null)
+  const classSetupRef = useRef(null)
+  const unsavedGesturesRef = useRef([])
+  const saveInProgressRef = useRef(false)
+
+  useEffect(() => { sessionIdRef.current = sessionId }, [sessionId])
+  useEffect(() => { classSetupRef.current = classSetup }, [classSetup])
+
   useEffect(() => {
     const tick = () => {
       const now = new Date()
@@ -49,6 +57,7 @@ export default function StartClass({ selectedDate, onDateSelect, setupPrefs, upd
     setClassSetup(setupData)
     setSession({ ...setupData })
     markDirty()
+    unsavedGesturesRef.current = []
     try {
       const res = await fetch(`${API_BASE}/sessions/`, {
         method: 'POST',
@@ -71,37 +80,87 @@ export default function StartClass({ selectedDate, onDateSelect, setupPrefs, upd
     }
   }
 
-  const handleGestureDetected = (gestureData) => {
+  const saveSingleGesture = async (sessionId, entry) => {
+    try {
+      const response = await fetch(`${API_BASE}/gestures/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: parseInt(sessionId),
+          chair_rank: parseInt(entry.chair_rank),
+          gesture: entry.gesture,
+        })
+      })
+      return response.ok
+    } catch (err) {
+      console.error('Failed to save gesture:', err)
+      return false
+    }
+  }
+
+  const handleGestureDetected = useCallback((gestureData) => {
     if (!gestureData || !gestureData.gesture) return
     const timestamp = new Date()
+    const chairRank = gestureData.chair_rank || 1
+    const savedToDB = gestureData.log_id != null
+
     setDetectedGesture(gestureData.gesture)
     setGestureLog(prev => [{
       time: timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       date: timestamp.toLocaleDateString('en-US'),
       gesture: gestureData.gesture,
       confidence: gestureData.confidence !== undefined ? gestureData.confidence : null,
-      rankChair: gestureData.chair_rank ? `#${gestureData.chair_rank}` : `#${prev.length + 1}`,
-      activityMode: classSetup?.activityMode || 'Lecture',
+      rankChair: `#${chairRank}`,
+      activityMode: classSetupRef.current?.activityMode || 'Lecture',
       isAlert: gestureData.is_alert || false,
+      savedToDB,
     }, ...prev])
-  }
+
+    if (!savedToDB && sessionIdRef.current) {
+      unsavedGesturesRef.current.push({
+        gesture: gestureData.gesture,
+        chair_rank: chairRank,
+      })
+    }
+  }, [])
 
   const handleEndClass = () => setShowSummary(true)
 
   const handleSaveProgress = useCallback(async () => {
+    if (saveInProgressRef.current) return
+    saveInProgressRef.current = true
+
     try {
-      const res = await fetch(`${API_BASE}/sessions/active/`)
-      const session = await res.json()
-      if (session?.id) {
-        await fetch(`${API_BASE}/sessions/${session.id}/`, {
+      let activeSessionId = sessionIdRef.current
+
+      if (!activeSessionId) {
+        const res = await fetch(`${API_BASE}/sessions/active/`)
+        const session = await res.json()
+        activeSessionId = session?.id
+      }
+
+      if (activeSessionId) {
+        const toSave = [...unsavedGesturesRef.current]
+        unsavedGesturesRef.current = []
+
+        for (const entry of toSave) {
+          const saved = await saveSingleGesture(activeSessionId, entry)
+          if (!saved) {
+            unsavedGesturesRef.current.push(entry)
+          }
+        }
+
+        await fetch(`${API_BASE}/sessions/${activeSessionId}/`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'end' })
         })
       }
     } catch (err) {
-      console.error('Failed to end session', err)
+      console.error('Failed to save session:', err)
     }
+
+    saveInProgressRef.current = false
     markClean()
     setSession(null)
     setShowSummary(false)
@@ -109,13 +168,27 @@ export default function StartClass({ selectedDate, onDateSelect, setupPrefs, upd
   }, [markClean, setSession, onSaveSuccess])
 
   const handleStartNewClass = () => {
-    markClean(); setSession(null); setClassSetup(null); setShowSummary(false)
-    setShowReadyDialog(false); setGestureLog([]); setDetectedGesture(''); setSessionId(null)
+    markClean()
+    setSession(null)
+    setClassSetup(null)
+    setShowSummary(false)
+    setShowReadyDialog(false)
+    setGestureLog([])
+    setDetectedGesture('')
+    setSessionId(null)
+    unsavedGesturesRef.current = []
   }
 
   const handleDiscard = () => {
-    markClean(); setSession(null); setClassSetup(null); setShowSummary(false)
-    setGestureLog([]); setDetectedGesture(''); setSessionId(null); setShowReadyDialog(true)
+    markClean()
+    setSession(null)
+    setClassSetup(null)
+    setShowSummary(false)
+    setGestureLog([])
+    setDetectedGesture('')
+    setSessionId(null)
+    setShowReadyDialog(true)
+    unsavedGesturesRef.current = []
   }
 
   if (showReadyDialog) {
@@ -154,11 +227,11 @@ export default function StartClass({ selectedDate, onDateSelect, setupPrefs, upd
     )
   }
 
-  const totalGestures     = gestureLog.length
+  const totalGestures = gestureLog.length
   const totalChairRanking = new Set(gestureLog.map(g => g.rankChair)).size
-  const alertCount        = gestureLog.filter(g => g.isAlert).length
-  const modeConfig        = getModeConfig(classSetup.activityMode)
-  const timerDuration     = classSetup.timerDuration || 0
+  const alertCount = gestureLog.filter(g => g.isAlert).length
+  const modeConfig = getModeConfig(classSetup.activityMode)
+  const timerDuration = classSetup.timerDuration || 0
 
   return (
     <>
@@ -189,10 +262,16 @@ export default function StartClass({ selectedDate, onDateSelect, setupPrefs, upd
         }
         .sc-datetime-btn {
           display: flex; align-items: center; gap: 7px;
-          background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.1);
-          border-radius: 8px; padding: 6px 12px; cursor: pointer;
-          color: rgba(186,210,235,0.9); font-size: 12px; font-weight: 500;
-          font-family: 'DM Sans','Segoe UI',sans-serif; transition: all 0.18s ease;
+          background: rgba(255,255,255,0.07);
+          border: 1px solid rgba(255,255,255,0.1);
+          border-radius: 8px;
+          padding: 6px 12px;
+          cursor: pointer;
+          color: rgba(186,210,235,0.9);
+          font-size: 12px;
+          font-weight: 500;
+          font-family: 'DM Sans','Segoe UI',sans-serif;
+          transition: all 0.18s ease;
         }
         .sc-datetime-btn:hover { background: rgba(59,130,246,0.15); border-color: rgba(59,130,246,0.3); }
         .sc-avatar { width: 34px; height: 34px; background: linear-gradient(135deg,#3b82f6,#1d4ed8); border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(59,130,246,0.3); }
@@ -200,71 +279,18 @@ export default function StartClass({ selectedDate, onDateSelect, setupPrefs, upd
         .sc-layout { display: flex; gap: 20px; height: 100%; }
         .sc-left { display: flex; flex-direction: column; gap: 0; width: 45%; min-width: 0; }
         .sc-right { display: flex; flex-direction: column; gap: 14px; flex: 1; min-width: 0; }
-        .sc-camera-card {
-          background: white;
-          border-radius: 16px;
-          border: 1px solid rgba(0,0,0,0.05);
-          box-shadow: 0 2px 12px rgba(0,0,0,0.04);
-          overflow: hidden;
-        }
-        .sc-camera-header {
-          padding: 12px 16px 10px;
-          border-bottom: 1px solid rgba(0,0,0,0.05);
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-        }
+        .sc-camera-card { background: white; border-radius: 16px; border: 1px solid rgba(0,0,0,0.05); box-shadow: 0 2px 12px rgba(0,0,0,0.04); overflow: hidden; }
+        .sc-camera-header { padding: 12px 16px 10px; border-bottom: 1px solid rgba(0,0,0,0.05); display: flex; align-items: center; justify-content: space-between; }
         .sc-camera-title { font-size: 13px; font-weight: 700; color: #0f172a; }
         .sc-camera-body { padding: 12px; }
-        .sc-camera-footer {
-          padding: 10px 16px;
-          border-top: 1px solid rgba(0,0,0,0.04);
-          background: #f8fafc;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
+        .sc-camera-footer { padding: 10px 16px; border-top: 1px solid rgba(0,0,0,0.04); background: #f8fafc; display: flex; justify-content: space-between; align-items: center; }
         .sc-curr-gesture-label { font-size: 11px; color: #94a3b8; font-weight: 500; }
         .sc-curr-gesture-value { font-size: 12px; font-weight: 700; color: #3b82f6; text-transform: capitalize; }
-        .sc-mode-card {
-          background: white;
-          border-radius: 14px;
-          border: 1px solid rgba(0,0,0,0.05);
-          box-shadow: 0 2px 10px rgba(0,0,0,0.04);
-          padding: 12px 16px;
-          display: flex;
-          align-items: center;
-          gap: 12px;
-        }
+        .sc-mode-card { background: white; border-radius: 14px; border: 1px solid rgba(0,0,0,0.05); box-shadow: 0 2px 10px rgba(0,0,0,0.04); padding: 12px 16px; display: flex; align-items: center; gap: 12px; }
         .sc-mode-label { font-size: 12px; color: #64748b; font-weight: 500; }
-        .sc-mode-badge {
-          display: flex;
-          align-items: center;
-          gap: 7px;
-          padding: 6px 14px;
-          border-radius: 20px;
-          font-size: 13px;
-          font-weight: 700;
-        }
-        .sc-log-card {
-          background: white;
-          border-radius: 14px;
-          border: 1px solid rgba(0,0,0,0.05);
-          box-shadow: 0 2px 10px rgba(0,0,0,0.04);
-          display: flex;
-          flex-direction: column;
-          flex: 1;
-          min-height: 0;
-          overflow: hidden;
-        }
-        .sc-log-header {
-          padding: 12px 16px 10px;
-          border-bottom: 1px solid rgba(0,0,0,0.05);
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          flex-shrink: 0;
-        }
+        .sc-mode-badge { display: flex; align-items: center; gap: 7px; padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 700; }
+        .sc-log-card { background: white; border-radius: 14px; border: 1px solid rgba(0,0,0,0.05); box-shadow: 0 2px 10px rgba(0,0,0,0.04); display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+        .sc-log-header { padding: 12px 16px 10px; border-bottom: 1px solid rgba(0,0,0,0.05); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
         .sc-log-title { font-size: 13px; font-weight: 700; color: #0f172a; }
         .sc-log-count { font-size: 10px; background: #f1f5f9; color: #64748b; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
         .sc-log-body { overflow-y: auto; flex: 1; }
@@ -272,64 +298,20 @@ export default function StartClass({ selectedDate, onDateSelect, setupPrefs, upd
         .sc-log-empty-icon { width: 44px; height: 44px; background: #f1f5f9; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 10px; }
         .sc-log-empty-text { font-size: 12px; color: #94a3b8; font-weight: 500; }
         .sc-log-table { width: 100%; border-collapse: collapse; }
-        .sc-log-thead th {
-          padding: 8px 12px;
-          text-align: left;
-          font-size: 10px;
-          font-weight: 700;
-          color: #94a3b8;
-          background: #f8fafc;
-          text-transform: uppercase;
-          letter-spacing: 0.6px;
-          border-bottom: 1px solid rgba(0,0,0,0.05);
-        }
+        .sc-log-thead th { padding: 8px 12px; text-align: left; font-size: 10px; font-weight: 700; color: #94a3b8; background: #f8fafc; text-transform: uppercase; letter-spacing: 0.6px; border-bottom: 1px solid rgba(0,0,0,0.05); }
         .sc-log-row { border-bottom: 1px solid rgba(0,0,0,0.04); transition: background 0.15s ease; }
         .sc-log-row:hover { background: #f8fafc; }
         .sc-log-row.new { background: rgba(59,130,246,0.04); }
         .sc-log-row td { padding: 8px 12px; font-size: 11px; color: #475569; font-variant-numeric: tabular-nums; }
         .sc-log-gesture { text-transform: capitalize; font-weight: 600; color: #334155; }
         .sc-conf-pill { font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 4px; background: rgba(59,130,246,0.1); color: #3b82f6; margin-left: 4px; }
-        .sc-stats-card {
-          background: white;
-          border-radius: 14px;
-          border: 1px solid rgba(0,0,0,0.05);
-          box-shadow: 0 2px 10px rgba(0,0,0,0.04);
-          padding: 14px 16px;
-        }
+        .sc-stats-card { background: white; border-radius: 14px; border: 1px solid rgba(0,0,0,0.05); box-shadow: 0 2px 10px rgba(0,0,0,0.04); padding: 14px 16px; }
         .sc-stats-title { font-size: 12px; font-weight: 700; color: #0f172a; margin-bottom: 12px; letter-spacing: 0.2px; }
         .sc-stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
         .sc-stat-item { text-align: center; }
-        .sc-stat-item-label {
-          font-size: 9px;
-          font-weight: 700;
-          color: #94a3b8;
-          background: #f1f5f9;
-          padding: 3px 6px;
-          border-radius: 6px;
-          margin-bottom: 5px;
-          letter-spacing: 0.3px;
-          text-transform: uppercase;
-          line-height: 1.3;
-        }
+        .sc-stat-item-label { font-size: 9px; font-weight: 700; color: #94a3b8; background: #f1f5f9; padding: 3px 6px; border-radius: 6px; margin-bottom: 5px; letter-spacing: 0.3px; text-transform: uppercase; line-height: 1.3; }
         .sc-stat-item-value { font-size: 22px; font-weight: 700; color: #0f172a; line-height: 1; }
-        .sc-end-btn {
-          background: linear-gradient(135deg, #ef4444, #dc2626);
-          color: white;
-          font-weight: 700;
-          padding: 13px 20px;
-          border: none;
-          border-radius: 12px;
-          cursor: pointer;
-          font-size: 14px;
-          font-family: 'DM Sans','Segoe UI',sans-serif;
-          transition: all 0.18s ease;
-          box-shadow: 0 4px 14px rgba(239,68,68,0.3);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 8px;
-          letter-spacing: 0.2px;
-        }
+        .sc-end-btn { background: linear-gradient(135deg, #ef4444, #dc2626); color: white; font-weight: 700; padding: 13px 20px; border: none; border-radius: 12px; cursor: pointer; font-size: 14px; font-family: 'DM Sans','Segoe UI',sans-serif; transition: all 0.18s ease; box-shadow: 0 4px 14px rgba(239,68,68,0.3); display: flex; align-items: center; justify-content: center; gap: 8px; letter-spacing: 0.2px; }
         .sc-end-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(239,68,68,0.4); }
         @keyframes lc-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.6;transform:scale(1.3)} }
       `}</style>
@@ -398,10 +380,7 @@ export default function StartClass({ selectedDate, onDateSelect, setupPrefs, upd
             <div className="sc-right">
               <div className="sc-mode-card">
                 <span className="sc-mode-label">Activity Mode</span>
-                <div
-                  className="sc-mode-badge"
-                  style={{ background: modeConfig.bg, color: modeConfig.color, border: `1px solid ${modeConfig.border}` }}
-                >
+                <div className="sc-mode-badge" style={{ background: modeConfig.bg, color: modeConfig.color, border: `1px solid ${modeConfig.border}` }}>
                   <span>{modeConfig.icon}</span>
                   {classSetup.activityMode || 'Lecture'}
                 </div>
@@ -436,7 +415,11 @@ export default function StartClass({ selectedDate, onDateSelect, setupPrefs, upd
                     <table className="sc-log-table">
                       <thead className="sc-log-thead">
                         <tr>
-                          {['Time', 'Gesture', 'Conf', 'Rank', 'Mode'].map(h => <th key={h}>{h}</th>)}
+                          <th>Time</th>
+                          <th>Gesture</th>
+                          <th>Conf</th>
+                          <th>Rank</th>
+                          <th>Mode</th>
                         </tr>
                       </thead>
                       <tbody>

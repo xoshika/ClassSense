@@ -2,6 +2,13 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useGestureStream } from '../hooks/useWebSocket';
 import ActivityRulesModal from './ActivityRulesModal';
 
+const POSE_CONNECTIONS = [
+  [0,1],[1,2],[2,3],[3,7],[0,4],[4,5],[5,6],[6,8],
+  [9,10],[11,12],[11,13],[13,15],[12,14],[14,16],
+  [11,23],[12,24],[23,24],[23,25],[24,26],[25,27],[26,28],
+  [27,29],[28,30],[29,31],[30,32],[27,31],[28,32],
+];
+
 function getGestureStatus(gesture, mode) {
   const rules = {
     lesson:  { allowed: ['raised_hand','peace_sign'], warning: ['wave','clap'], alert: [] },
@@ -30,6 +37,22 @@ const VIOLATION_RULES_INFO = {
 };
 
 const fmt = (g) => (g || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
+function playTingSound() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.setValueAtTime(1200, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(800, ctx.currentTime + 0.15);
+    gain.gain.setValueAtTime(0.4, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.8);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.8);
+  } catch (e) {}
+}
 
 function playAmbulanceSound() {
   try {
@@ -97,7 +120,6 @@ function ViolationModal({ violation, onDismiss, mode }) {
           position: 'absolute', inset: 0, borderRadius: 20, pointerEvents: 'none',
           background: 'repeating-linear-gradient(45deg, rgba(239,68,68,0.03) 0px, rgba(239,68,68,0.03) 1px, transparent 1px, transparent 8px)',
         }} />
-
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20 }}>
           <div style={{
             width: 52, height: 52, borderRadius: 14,
@@ -117,11 +139,10 @@ function ViolationModal({ violation, onDismiss, mode }) {
               ⚠ Gesture Violation Detected
             </div>
             <div style={{ fontSize: 20, fontWeight: 700, color: 'white', letterSpacing: -0.4, lineHeight: 1.2 }}>
-              {violation.studentName || `Student`} — Chair #{violation.chairRank}
+              {violation.studentName || 'Student'} — Chair #{violation.chairRank}
             </div>
           </div>
         </div>
-
         <div style={{
           background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)',
           borderRadius: 12, padding: '14px 18px', marginBottom: 16,
@@ -139,7 +160,6 @@ function ViolationModal({ violation, onDismiss, mode }) {
             Detected during <span style={{ color: '#f59e0b', fontWeight: 700 }}>{violation.mode}</span> mode at {violation.time}
           </div>
         </div>
-
         {ruleInfo.forbidden.length > 0 && (
           <div style={{
             background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
@@ -165,7 +185,6 @@ function ViolationModal({ violation, onDismiss, mode }) {
             </div>
           </div>
         )}
-
         <button
           onClick={onDismiss}
           style={{
@@ -181,7 +200,6 @@ function ViolationModal({ violation, onDismiss, mode }) {
         >
           Acknowledge & Dismiss
         </button>
-
         <style>{`
           @keyframes vm-pulse {
             0%,100%{box-shadow:0 0 20px rgba(239,68,68,0.5)}
@@ -203,13 +221,13 @@ function NotificationBell({ notifications, onClear }) {
         onClick={() => setOpen(v => !v)}
         style={{
           display: 'flex', alignItems: 'center', gap: 6,
-          padding: '7px 12px', borderRadius: 9, border: 'none', cursor: 'pointer',
+          padding: '7px 12px', borderRadius: 9, cursor: 'pointer',
           background: unread > 0 ? 'rgba(239,68,68,0.12)' : 'rgba(255,255,255,0.65)',
           backdropFilter: 'blur(12px)',
           border: unread > 0 ? '1px solid rgba(239,68,68,0.3)' : '1px solid rgba(255,255,255,0.4)',
           color: unread > 0 ? '#ef4444' : '#64748b',
           fontFamily: 'inherit', fontSize: 12, fontWeight: 700,
-          transition: 'all 0.18s ease', position: 'relative',
+          transition: 'all 0.18s ease',
         }}
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
@@ -225,7 +243,6 @@ function NotificationBell({ notifications, onClear }) {
           }}>{unread}</span>
         )}
       </button>
-
       {open && (
         <div style={{
           position: 'absolute', top: '110%', right: 0, width: 320, zIndex: 9999,
@@ -276,6 +293,238 @@ function NotificationBell({ notifications, onClear }) {
   );
 }
 
+function drawCIAOverlay(canvas, videoEl, persons, missingChairs, studentNames, mode, scanAnimRef) {
+  if (!canvas || !videoEl) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width;
+  const H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const now = Date.now();
+
+  missingChairs.forEach(chair => {
+    const x = ((chair - 1) / Math.max(missingChairs.length + persons.length, 1)) * W;
+    const w = W / Math.max(missingChairs.length + persons.length, 1);
+    const pulse = 0.5 + 0.5 * Math.sin(now / 500);
+
+    ctx.save();
+    ctx.strokeStyle = `rgba(239,68,68,${0.6 + 0.4 * pulse})`;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 4]);
+    ctx.strokeRect(x + 10, 20, w - 20, H - 40);
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = `rgba(239,68,68,${0.12 + 0.08 * pulse})`;
+    ctx.fillRect(x + 10, 20, w - 20, H - 40);
+
+    const label = studentNames[chair - 1] || `Student ${chair}`;
+    ctx.fillStyle = `rgba(239,68,68,${0.9 + 0.1 * pulse})`;
+    ctx.font = 'bold 11px "DM Sans", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`⚠ MISSING`, x + w / 2, 48);
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.font = 'bold 10px "DM Sans", sans-serif';
+    ctx.fillText(`CHAIR #${chair}`, x + w / 2, 64);
+    ctx.fillStyle = 'rgba(239,68,68,0.85)';
+    ctx.font = '9px "DM Sans", sans-serif';
+    ctx.fillText(label.toUpperCase(), x + w / 2, 80);
+    ctx.restore();
+  });
+
+  persons.forEach(person => {
+    const { bbox, landmarks, gesture, confidence, chair_rank } = person;
+    if (!bbox) return;
+
+    const bx = bbox.x * W;
+    const by = bbox.y * H;
+    const bw = bbox.w * W;
+    const bh = bbox.h * H;
+
+    const status = gesture ? getGestureStatus(gesture, mode) : null;
+    const boxColor = gesture
+      ? (status?.isViolation ? '#ef4444' : status?.color || '#00d4ff')
+      : '#00d4ff';
+
+    const pulse = 0.7 + 0.3 * Math.sin(now / 600);
+    const cornerLen = Math.min(bw, bh) * 0.18;
+    const lw = 2.5;
+
+    ctx.save();
+    ctx.strokeStyle = boxColor;
+    ctx.lineWidth = lw;
+    ctx.shadowColor = boxColor;
+    ctx.shadowBlur = 8 * pulse;
+
+    const corners = [
+      { x: bx,      y: by,      dx: 1,  dy: 1  },
+      { x: bx + bw, y: by,      dx: -1, dy: 1  },
+      { x: bx,      y: by + bh, dx: 1,  dy: -1 },
+      { x: bx + bw, y: by + bh, dx: -1, dy: -1 },
+    ];
+    corners.forEach(({ x, y, dx, dy }) => {
+      ctx.beginPath();
+      ctx.moveTo(x + dx * cornerLen, y);
+      ctx.lineTo(x, y);
+      ctx.lineTo(x, y + dy * cornerLen);
+      ctx.stroke();
+    });
+
+    ctx.fillStyle = gesture
+      ? `${boxColor}22`
+      : 'rgba(0,212,255,0.04)';
+    ctx.fillRect(bx, by, bw, bh);
+
+    ctx.shadowBlur = 0;
+    ctx.restore();
+
+    if (landmarks && landmarks.length >= 17) {
+      ctx.save();
+      POSE_CONNECTIONS.forEach(([a, b]) => {
+        if (a >= landmarks.length || b >= landmarks.length) return;
+        const lmA = landmarks[a];
+        const lmB = landmarks[b];
+        if (!lmA || !lmB) return;
+        if ((lmA.v || 0) < 0.3 || (lmB.v || 0) < 0.3) return;
+        ctx.beginPath();
+        ctx.moveTo(lmA.x * W, lmA.y * H);
+        ctx.lineTo(lmB.x * W, lmB.y * H);
+        ctx.strokeStyle = gesture
+          ? `${boxColor}cc`
+          : 'rgba(0,212,255,0.7)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      });
+
+      landmarks.forEach((lm, idx) => {
+        if ((lm.v || 0) < 0.3) return;
+        const px = lm.x * W;
+        const py = lm.y * H;
+        ctx.beginPath();
+        ctx.arc(px, py, idx === 0 ? 4 : 2.5, 0, Math.PI * 2);
+        ctx.fillStyle = idx === 0
+          ? (gesture ? boxColor : '#00d4ff')
+          : (gesture ? `${boxColor}dd` : 'rgba(0,212,255,0.8)');
+        ctx.fill();
+      });
+      ctx.restore();
+    }
+
+    const labelName = studentNames ? (studentNames[chair_rank - 1] || `Student ${chair_rank}`) : `Student ${chair_rank}`;
+    const labelY = by > 40 ? by - 6 : by + bh + 18;
+
+    ctx.save();
+    const headerText = `CHAIR #${chair_rank}`;
+    const nameText = labelName.toUpperCase();
+    ctx.font = 'bold 11px "DM Sans", monospace';
+    const hw = ctx.measureText(headerText).width;
+    const nw = ctx.measureText(nameText).width + 40;
+    const tagW = Math.max(hw, nw) + 20;
+    const tagH = 34;
+    const tagX = bx;
+    const tagY = labelY - 28;
+
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx.beginPath();
+    ctx.roundRect(tagX, tagY, tagW, tagH, 4);
+    ctx.fill();
+
+    ctx.strokeStyle = boxColor;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(tagX, tagY, tagW, tagH, 4);
+    ctx.stroke();
+
+    ctx.fillStyle = boxColor;
+    ctx.font = 'bold 9px "DM Sans", monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(headerText, tagX + 8, tagY + 12);
+
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx.font = 'bold 10px "DM Sans", monospace';
+    ctx.fillText(nameText, tagX + 8, tagY + 26);
+    ctx.restore();
+
+    if (gesture) {
+      const scanRef = scanAnimRef.current;
+      const scanKey = `${chair_rank}`;
+      if (!scanRef[scanKey]) scanRef[scanKey] = { start: now, conf: confidence || 0 };
+      const elapsed = now - scanRef[scanKey].start;
+      const scanProgress = Math.min(elapsed / 600, 1);
+
+      const scanX = bx + bw * 0.1;
+      const scanY = by + bh * 0.15;
+      const scanW = bw * 0.8;
+      const scanH = bh * 0.7;
+
+      ctx.save();
+      ctx.strokeStyle = status?.isViolation ? 'rgba(239,68,68,0.8)' : 'rgba(0,212,255,0.6)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.strokeRect(scanX, scanY, scanW * scanProgress, scanH * scanProgress);
+      ctx.setLineDash([]);
+
+      const scanLineY = scanY + (scanH * 0.5 * Math.sin(now / 300 + chair_rank) + scanH * 0.5);
+      const grad = ctx.createLinearGradient(scanX, scanLineY - 8, scanX, scanLineY + 8);
+      grad.addColorStop(0, 'transparent');
+      grad.addColorStop(0.5, status?.isViolation ? 'rgba(239,68,68,0.5)' : 'rgba(0,212,255,0.5)');
+      grad.addColorStop(1, 'transparent');
+      ctx.fillStyle = grad;
+      ctx.fillRect(scanX, scanLineY - 8, scanW, 16);
+      ctx.restore();
+
+      const confPct = typeof confidence === 'number' ? confidence : (confidence || 0);
+      const gestLabel = fmt(gesture);
+      const statusLabel = status?.label || 'Detected';
+
+      const glX = bx + bw / 2;
+      const glY = by + bh + 14;
+
+      ctx.save();
+      ctx.font = 'bold 12px "DM Sans", monospace';
+      const glW = ctx.measureText(gestLabel).width + 80;
+      const glH = 28;
+
+      ctx.fillStyle = 'rgba(0,0,0,0.82)';
+      ctx.beginPath();
+      ctx.roundRect(glX - glW / 2, glY - 4, glW, glH, 6);
+      ctx.fill();
+
+      ctx.strokeStyle = status?.isViolation ? '#ef4444' : boxColor;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.roundRect(glX - glW / 2, glY - 4, glW, glH, 6);
+      ctx.stroke();
+
+      ctx.fillStyle = status?.isViolation ? '#ef4444' : (status?.color || '#00d4ff');
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 11px "DM Sans", monospace';
+      ctx.fillText(gestLabel, glX - 18, glY + 13);
+
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.font = '9px monospace';
+      ctx.fillText(`${confPct}%`, glX + (glW / 2) - 20, glY + 13);
+
+      ctx.fillStyle = status?.isViolation ? '#ef4444' : '#10b981';
+      ctx.font = 'bold 8px monospace';
+      ctx.fillText(statusLabel.toUpperCase(), glX + (glW / 2) - 40, glY + 23);
+      ctx.restore();
+
+    } else {
+      if (scanAnimRef.current[`${chair_rank}`]) {
+        delete scanAnimRef.current[`${chair_rank}`];
+      }
+    }
+  });
+
+  const activeChairs = new Set(persons.map(p => p.chair_rank));
+  ctx.save();
+  ctx.font = '9px monospace';
+  ctx.fillStyle = 'rgba(0,212,255,0.4)';
+  ctx.textAlign = 'left';
+  ctx.fillText(`CLASSSENSE AI ◆ ${persons.length} DETECTED`, 8, H - 8);
+  ctx.restore();
+}
+
 export default function LiveCamera({
   sessionId,
   numSeats = 20,
@@ -283,14 +532,19 @@ export default function LiveCamera({
   onGestureDetected = null,
   timerDuration = 0,
   onTimerEnd = null,
+  studentNames = [],
 }) {
   const videoRef         = useRef(null);
   const canvasRef        = useRef(null);
+  const overlayCanvasRef = useRef(null);
   const modalVideoRef    = useRef(null);
   const frameIntervalRef = useRef(null);
+  const drawIntervalRef  = useRef(null);
   const streamRef        = useRef(null);
   const onGestureRef     = useRef(onGestureDetected);
   const timerRef         = useRef(null);
+  const scanAnimRef      = useRef({});
+  const prevPersonsRef   = useRef([]);
 
   useEffect(() => { onGestureRef.current = onGestureDetected; }, [onGestureDetected]);
 
@@ -306,8 +560,9 @@ export default function LiveCamera({
   const [timesUp, setTimesUp]                 = useState(false);
   const [violationAlert, setViolationAlert]   = useState(null);
   const [notifications, setNotifications]     = useState([]);
+  const [rollCallMsg, setRollCallMsg]         = useState(null);
 
-  const { gestures, isConnected, sendFrame, sendMessage } = useGestureStream(sessionId, numSeats);
+  const { gestures, isConnected, sendFrame, sendMessage, persons } = useGestureStream(sessionId, numSeats);
 
   useEffect(() => {
     const tick = () => {
@@ -320,6 +575,33 @@ export default function LiveCamera({
   }, []);
 
   useEffect(() => {
+    if (persons && persons.length !== prevPersonsRef.current.length && isRunning) {
+      const detectedChairs = new Set(persons.map(p => p.chair_rank));
+      const missingChairs = [];
+      for (let i = 1; i <= numSeats; i++) {
+        if (!detectedChairs.has(i)) missingChairs.push(i);
+      }
+      if (persons.length === numSeats) {
+        setRollCallMsg({ type: 'ok', text: `✅ All ${numSeats} chair ranking(s) detected` });
+      } else if (persons.length > 0) {
+        const missingNames = missingChairs.map(c => studentNames[c - 1] || `Student ${c}`);
+        setRollCallMsg({
+          type: 'warn',
+          text: `⚠ ${persons.length}/${numSeats} detected — Missing: ${missingNames.join(', ')}`,
+        });
+      }
+      prevPersonsRef.current = persons;
+    }
+  }, [persons, numSeats, studentNames, isRunning]);
+
+  useEffect(() => {
+    if (rollCallMsg) {
+      const t = setTimeout(() => setRollCallMsg(null), 5000);
+      return () => clearTimeout(t);
+    }
+  }, [rollCallMsg]);
+
+  useEffect(() => {
     if (gestures.length > 0) {
       const latest = gestures[0];
       setCurrentGesture(latest);
@@ -329,30 +611,25 @@ export default function LiveCamera({
 
       if (status.isViolation || latest.is_alert) {
         const studentName = latest.student_name || `Student ${latest.chair_rank || 1}`;
-        const chairRank = latest.chair_rank || 1;
-        const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        const modeLabel = (mode || 'lecture').charAt(0).toUpperCase() + (mode || 'lecture').slice(1);
+        const chairRank   = latest.chair_rank || 1;
+        const timeStr     = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const modeLabel   = (mode || 'lecture').charAt(0).toUpperCase() + (mode || 'lecture').slice(1);
 
         const newNotif = {
           studentName,
           chairRank,
-          gesture: latest.gesture,
-          mode: modeLabel,
-          time: timeStr,
+          gesture:     latest.gesture,
+          mode:        modeLabel,
+          time:        timeStr,
           isViolation: true,
-          read: false,
+          read:        false,
         };
 
-        setViolationAlert({
-          studentName,
-          chairRank,
-          gesture: latest.gesture,
-          mode: modeLabel,
-          time: timeStr,
-        });
-
+        setViolationAlert({ studentName, chairRank, gesture: latest.gesture, mode: modeLabel, time: timeStr });
         setNotifications(prev => [newNotif, ...prev.slice(0, 49)]);
         playAmbulanceSound();
+      } else {
+        playTingSound();
       }
     }
   }, [gestures, mode]);
@@ -401,6 +678,26 @@ export default function LiveCamera({
     sendFrame(canvas.toDataURL('image/jpeg', 0.7));
   }, [sendFrame]);
 
+  const drawOverlay = useCallback(() => {
+    const video  = videoRef.current;
+    const canvas = overlayCanvasRef.current;
+    if (!video || !canvas || video.readyState < 2) return;
+
+    const rect = video.getBoundingClientRect();
+    if (canvas.width !== Math.round(rect.width) || canvas.height !== Math.round(rect.height)) {
+      canvas.width  = Math.round(rect.width)  || video.videoWidth  || 640;
+      canvas.height = Math.round(rect.height) || video.videoHeight || 480;
+    }
+
+    const detectedChairs = new Set((persons || []).map(p => p.chair_rank));
+    const missingChairs  = [];
+    for (let i = 1; i <= numSeats; i++) {
+      if (!detectedChairs.has(i)) missingChairs.push(i);
+    }
+
+    drawCIAOverlay(canvas, video, persons || [], missingChairs, studentNames, mode, scanAnimRef);
+  }, [persons, numSeats, studentNames, mode]);
+
   const startCamera = useCallback(async () => {
     setShowRulesModal(true);
   }, []);
@@ -427,23 +724,32 @@ export default function LiveCamera({
 
   const stopCamera = useCallback(() => {
     if (frameIntervalRef.current) { clearInterval(frameIntervalRef.current); frameIntervalRef.current = null; }
+    if (drawIntervalRef.current)  { clearInterval(drawIntervalRef.current);  drawIntervalRef.current  = null; }
     if (timerRef.current) clearInterval(timerRef.current);
     if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
     if (videoRef.current)      videoRef.current.srcObject = null;
     if (modalVideoRef.current) modalVideoRef.current.srcObject = null;
+    const oc = overlayCanvasRef.current;
+    if (oc) oc.getContext('2d').clearRect(0, 0, oc.width, oc.height);
     setIsRunning(false);
     setTimerRunning(false);
     setCurrentGesture(null);
+    setRollCallMsg(null);
   }, []);
 
   useEffect(() => {
     if (isRunning) {
       frameIntervalRef.current = setInterval(captureAndSendFrame, 300);
+      drawIntervalRef.current  = setInterval(drawOverlay, 60);
     } else {
       if (frameIntervalRef.current) { clearInterval(frameIntervalRef.current); frameIntervalRef.current = null; }
+      if (drawIntervalRef.current)  { clearInterval(drawIntervalRef.current);  drawIntervalRef.current  = null; }
     }
-    return () => { if (frameIntervalRef.current) clearInterval(frameIntervalRef.current); };
-  }, [isRunning, captureAndSendFrame]);
+    return () => {
+      if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
+      if (drawIntervalRef.current)  clearInterval(drawIntervalRef.current);
+    };
+  }, [isRunning, captureAndSendFrame, drawOverlay]);
 
   useEffect(() => { return () => stopCamera(); }, [stopCamera]);
 
@@ -456,9 +762,9 @@ export default function LiveCamera({
 
   const handlePinChair = (rank) => setPinnedChair(prev => prev === rank ? null : rank);
 
-  const timerPct = timerDuration > 0 ? (timerSeconds / (timerDuration * 60)) * 100 : 100;
-  const timerColor = timerPct > 50 ? '#10b981' : timerPct > 20 ? '#f59e0b' : '#ef4444';
-  const statusInfo    = currentGesture ? getGestureStatus(currentGesture.gesture, mode) : null;
+  const timerPct    = timerDuration > 0 ? (timerSeconds / (timerDuration * 60)) * 100 : 100;
+  const timerColor  = timerPct > 50 ? '#10b981' : timerPct > 20 ? '#f59e0b' : '#ef4444';
+  const statusInfo  = currentGesture ? getGestureStatus(currentGesture.gesture, mode) : null;
   const aiStatusColor = isConnected ? '#10b981' : '#ef4444';
   const aiStatusText  = isConnected ? 'AI Monitoring Active' : 'Not Connected';
   const modeLabel     = (mode || 'lesson').charAt(0).toUpperCase() + (mode || 'lesson').slice(1);
@@ -475,10 +781,15 @@ export default function LiveCamera({
           border:1px solid rgba(255,255,255,0.06);
         }
         .lc-video { width:100%; height:100%; object-fit:cover; display:block; }
+        .lc-overlay-canvas {
+          position:absolute; top:0; left:0; width:100%; height:100%;
+          pointer-events:none; z-index:2;
+        }
         .lc-overlay-top {
           position:absolute; top:0; left:0; right:0; padding:10px 12px;
           display:flex; align-items:center; justify-content:space-between; gap:8px;
           background:linear-gradient(180deg,rgba(0,0,0,0.65) 0%,transparent 100%);
+          z-index:3;
         }
         .lc-live-badge {
           display:flex; align-items:center; gap:6px;
@@ -506,13 +817,14 @@ export default function LiveCamera({
           background:rgba(0,0,0,0.7); backdrop-filter:blur(8px);
           border-radius:20px; padding:5px 14px;
           display:flex; align-items:center; gap:8px;
-          border:1px solid rgba(255,255,255,0.1);
+          border:1px solid rgba(255,255,255,0.1); z-index:3;
         }
         .lc-timer-text { font-size:14px; font-weight:700; font-variant-numeric:tabular-nums; }
         .lc-overlay-bottom {
           position:absolute; bottom:0; left:0; right:0; padding:10px 12px;
           display:flex; align-items:flex-end; justify-content:space-between;
           background:linear-gradient(0deg,rgba(0,0,0,0.65) 0%,transparent 100%);
+          z-index:3;
         }
         .lc-gesture-chip {
           color:white; padding:5px 12px; border-radius:8px;
@@ -534,7 +846,20 @@ export default function LiveCamera({
           background:rgba(0,0,0,0.4); backdrop-filter:blur(6px);
           color:rgba(255,255,255,0.4); font-size:10px;
           padding:3px 10px; border-radius:20px; pointer-events:none;
-          border:1px solid rgba(255,255,255,0.08);
+          border:1px solid rgba(255,255,255,0.08); z-index:3;
+        }
+        .lc-rollcall-banner {
+          position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+          z-index:10; text-align:center; pointer-events:none;
+          animation:lc-rollcall-in 0.4s cubic-bezier(0.34,1.56,0.64,1);
+        }
+        .lc-rollcall-inner {
+          background:rgba(0,0,0,0.82); backdrop-filter:blur(12px);
+          border-radius:12px; padding:14px 22px;
+          border:1px solid rgba(0,212,255,0.4);
+          box-shadow:0 0 30px rgba(0,212,255,0.2);
+          font-size:13px; font-weight:700; color:white;
+          letter-spacing:0.2px;
         }
         .lc-timesup-banner {
           position:absolute; inset:0; display:flex; flex-direction:column;
@@ -651,13 +976,9 @@ export default function LiveCamera({
         .lc-modal-close:hover { transform:scale(1.1); }
         @keyframes lc-livepulse { 0%,100%{opacity:1} 50%{opacity:0.2} }
         @keyframes lc-timesup-pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.04)} }
-        .lc-violation-flash {
-          animation: violation-flash 0.5s ease;
-        }
-        @keyframes violation-flash {
-          0%{box-shadow:0 0 0 0 rgba(239,68,68,0.8)}
-          50%{box-shadow:0 0 0 12px rgba(239,68,68,0.3)}
-          100%{box-shadow:0 0 0 0 rgba(239,68,68,0)}
+        @keyframes lc-rollcall-in {
+          from{opacity:0;transform:translate(-50%,-50%) scale(0.85)}
+          to{opacity:1;transform:translate(-50%,-50%) scale(1)}
         }
       `}</style>
 
@@ -681,10 +1002,23 @@ export default function LiveCamera({
         <div className="lc-video-wrap" onClick={() => setIsModalOpen(true)}>
           <video ref={videoRef} autoPlay playsInline muted className="lc-video" />
 
+          <canvas ref={overlayCanvasRef} className="lc-overlay-canvas" />
+
           {timesUp && (
             <div className="lc-timesup-banner" style={{ animation: 'lc-timesup-pulse 1s ease-in-out infinite' }}>
               <div className="lc-timesup-title">⏰ Time's Up!</div>
               <div className="lc-timesup-sub">Gesture detection is now locked. You can still view the camera.</div>
+            </div>
+          )}
+
+          {rollCallMsg && !timesUp && (
+            <div className="lc-rollcall-banner">
+              <div className="lc-rollcall-inner" style={{
+                borderColor: rollCallMsg.type === 'ok' ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)',
+                boxShadow: rollCallMsg.type === 'ok' ? '0 0 30px rgba(16,185,129,0.2)' : '0 0 30px rgba(239,68,68,0.2)',
+              }}>
+                {rollCallMsg.text}
+              </div>
             </div>
           )}
 
@@ -707,6 +1041,11 @@ export default function LiveCamera({
             <div className="lc-ai-badge">
               <div className="lc-ai-dot" style={{ background: aiStatusColor, boxShadow: `0 0 6px ${aiStatusColor}` }} />
               {isLocked ? 'Detection Locked' : aiStatusText}
+              {persons && persons.length > 0 && (
+                <span style={{ marginLeft: 6, background: 'rgba(0,212,255,0.2)', color: '#00d4ff', borderRadius: 10, padding: '1px 6px', fontSize: 9, fontWeight: 700 }}>
+                  {persons.length} DETECTED
+                </span>
+              )}
             </div>
           </div>
 
@@ -801,20 +1140,26 @@ export default function LiveCamera({
           </div>
           <div className="lc-chair-grid">
             {Array.from({ length: numSeats }, (_, i) => i + 1).map(rank => {
-              const isPinned = pinnedChair === rank;
+              const isPinned   = pinnedChair === rank;
               const recentGesture = gestures.find(g => g.chair_rank === rank);
-              const hasViolation = recentGesture && getGestureStatus(recentGesture.gesture, mode).isViolation;
+              const hasViolation  = recentGesture && getGestureStatus(recentGesture.gesture, mode).isViolation;
+              const isDetected    = persons && persons.some(p => p.chair_rank === rank);
               return (
                 <button
                   key={rank}
                   className={`lc-chair-btn ${isPinned ? 'pinned' : 'auto'}`}
                   onClick={() => handlePinChair(rank)}
-                  title={`Chair #${rank}${recentGesture ? ` — ${recentGesture.gesture}` : ''}`}
-                  style={hasViolation ? { border: '2px solid #ef4444', background: isPinned ? undefined : 'rgba(239,68,68,0.08)' } : {}}
+                  title={`Chair #${rank}${studentNames[rank-1] ? ` — ${studentNames[rank-1]}` : ''}${recentGesture ? ` — ${recentGesture.gesture}` : ''}`}
+                  style={hasViolation ? { border: '2px solid #ef4444', background: isPinned ? undefined : 'rgba(239,68,68,0.08)' }
+                    : isDetected ? { border: '1px solid rgba(0,212,255,0.4)', background: isPinned ? undefined : 'rgba(0,212,255,0.06)' }
+                    : {}}
                 >
                   {isPinned && <span className="lc-chair-pin-dot" />}
                   {hasViolation && !isPinned && (
                     <span style={{ position:'absolute', top:2, left:2, fontSize:8 }}>🚨</span>
+                  )}
+                  {isDetected && !isPinned && !hasViolation && (
+                    <span style={{ position:'absolute', top:2, left:2, width:5, height:5, borderRadius:'50%', background:'#00d4ff', boxShadow:'0 0 4px #00d4ff' }} />
                   )}
                   <span style={{ fontSize: 9, opacity: 0.6, lineHeight: 1 }}>Ch</span>
                   <span style={{ fontSize: 13, lineHeight: 1 }}>{rank}</span>
@@ -830,25 +1175,27 @@ export default function LiveCamera({
 
           <div className="lc-zone-bar" style={{ marginTop: 10 }}>
             {Array.from({ length: numSeats }, (_, i) => i + 1).map(rank => {
-              const isActive = gestures.some(g => g.chair_rank === rank);
-              const isPinned = pinnedChair === rank;
+              const isActive     = gestures.some(g => g.chair_rank === rank);
+              const isPinned     = pinnedChair === rank;
               const hasViolation = gestures.some(g => g.chair_rank === rank && getGestureStatus(g.gesture, mode).isViolation);
+              const isDetected   = persons && persons.some(p => p.chair_rank === rank);
               return (
                 <div
                   key={rank}
                   className="lc-zone-seg"
                   style={{
-                    background: hasViolation ? '#ef4444' : isPinned ? '#3b82f6' : isActive ? '#10b981' : 'rgba(0,0,0,0.06)',
+                    background: hasViolation ? '#ef4444' : isPinned ? '#3b82f6' : isActive ? '#10b981' : isDetected ? 'rgba(0,212,255,0.4)' : 'rgba(0,0,0,0.06)',
                     borderRight: '1px solid rgba(255,255,255,0.3)',
                   }}
                 />
               );
             })}
           </div>
-          <div style={{ display:'flex', gap:16, marginTop:6, fontSize:10, color:'#94a3b8', fontWeight:600 }}>
+          <div style={{ display:'flex', gap:16, marginTop:6, fontSize:10, color:'#94a3b8', fontWeight:600, flexWrap:'wrap' }}>
             <span style={{ display:'flex', alignItems:'center', gap:4 }}><span style={{ width:8, height:8, borderRadius:2, background:'#10b981', display:'inline-block' }} />Active</span>
             <span style={{ display:'flex', alignItems:'center', gap:4 }}><span style={{ width:8, height:8, borderRadius:2, background:'#3b82f6', display:'inline-block' }} />Pinned</span>
             <span style={{ display:'flex', alignItems:'center', gap:4 }}><span style={{ width:8, height:8, borderRadius:2, background:'#ef4444', display:'inline-block' }} />Violation</span>
+            <span style={{ display:'flex', alignItems:'center', gap:4 }}><span style={{ width:8, height:8, borderRadius:2, background:'rgba(0,212,255,0.5)', display:'inline-block' }} />Detected</span>
             <span style={{ display:'flex', alignItems:'center', gap:4 }}><span style={{ width:8, height:8, borderRadius:2, background:'rgba(0,0,0,0.1)', display:'inline-block' }} />Idle</span>
           </div>
         </div>
@@ -871,10 +1218,10 @@ export default function LiveCamera({
           ) : (
             <div style={{ maxHeight: 200, overflowY: 'auto' }}>
               {gestures.slice(0, 10).map((g, i) => {
-                const info = getGestureStatus(g.gesture, mode);
-                const ts = g.time || liveTime;
-                const conf = g.confidence !== undefined ? `${g.confidence}%` : null;
-                const studentLabel = g.student_name || `Student ${g.chair_rank || 1}`;
+                const info         = getGestureStatus(g.gesture, mode);
+                const ts           = g.time || liveTime;
+                const conf         = g.confidence !== undefined ? `${g.confidence}%` : null;
+                const studentLabel = g.student_name || (studentNames[g.chair_rank - 1]) || `Student ${g.chair_rank || 1}`;
                 return (
                   <div key={i} className="lc-alert-item" style={{
                     borderLeftColor: info.color,

@@ -2,7 +2,7 @@ import json
 import os
 import cv2
 import numpy as np
-from collections import deque
+from collections import deque, Counter
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 ML   = os.path.join(BASE, "ml_models")
@@ -74,9 +74,9 @@ MODE_RULES = {
     },
 }
 
-CONFIDENCE_THRESHOLD = 0.72
-MIN_CONFIDENCE_GAP   = 0.25
-SMOOTHING_FRAMES     = 3
+CONFIDENCE_THRESHOLD = 0.60
+MIN_CONFIDENCE_GAP   = 0.15
+SMOOTHING_FRAMES     = 5
 
 _frame_buffers: dict[str, deque] = {}
 
@@ -87,19 +87,22 @@ def get_rule(gesture: str, mode: str) -> dict:
 
 
 def get_chair_from_x(x_normalized: float, num_chairs: int) -> int:
-    zone = int(x_normalized * num_chairs)
-    return max(1, min(zone + 1, num_chairs))
+    x_normalized = max(0.0, min(1.0, x_normalized))
+    chair_width = 1.0 / num_chairs
+    return min(int(x_normalized / chair_width) + 1, num_chairs)
 
 
-def smooth_gesture(session_chair_key: str, gesture: str) -> str | None:
-    if session_chair_key not in _frame_buffers:
-        _frame_buffers[session_chair_key] = deque(maxlen=SMOOTHING_FRAMES)
-    buf = _frame_buffers[session_chair_key]
+def smooth_gesture(session_id, chair: int, gesture: str) -> str | None:
+    key = f"{session_id}_{chair}"
+    if key not in _frame_buffers:
+        _frame_buffers[key] = deque(maxlen=SMOOTHING_FRAMES)
+    buf = _frame_buffers[key]
     buf.append(gesture)
     if len(buf) < SMOOTHING_FRAMES:
         return None
-    if all(g == gesture for g in buf):
-        return gesture
+    most_common, count = Counter(buf).most_common(1)[0]
+    if count >= max(1, SMOOTHING_FRAMES // 2 + 1):
+        return most_common
     return None
 
 
@@ -250,11 +253,34 @@ def _load_pose_landmarker():
     options = PoseLandmarkerOptions(
         base_options=BaseOptions(model_asset_path=model_path),
         running_mode=VisionRunningMode.IMAGE,
+        num_poses=5,
         min_pose_detection_confidence=0.5,
         min_pose_presence_confidence=0.5,
         min_tracking_confidence=0.5,
     )
     return PoseLandmarker.create_from_options(options)
+
+
+def _compute_bounding_box(landmarks, frame_w: int, frame_h: int) -> dict:
+    xs = [lm.x for lm in landmarks]
+    ys = [lm.y for lm in landmarks]
+    x_min = max(0.0, min(xs) - 0.05)
+    y_min = max(0.0, min(ys) - 0.05)
+    x_max = min(1.0, max(xs) + 0.05)
+    y_max = min(1.0, max(ys) + 0.05)
+    return {
+        "x": round(x_min, 4),
+        "y": round(y_min, 4),
+        "w": round(x_max - x_min, 4),
+        "h": round(y_max - y_min, 4),
+    }
+
+
+def _extract_landmarks_for_frontend(landmarks) -> list:
+    return [
+        {"x": round(lm.x, 4), "y": round(lm.y, 4), "z": round(lm.z, 4), "v": round(lm.visibility, 3)}
+        for lm in landmarks
+    ]
 
 
 class GestureEngine:
@@ -301,22 +327,105 @@ class GestureEngine:
             self.image_model is not None or self.pose_model is not None
         )
 
-    def process(self, frame_bytes: bytes, num_chairs: int = 1, pinned_chair: int = None, session_id: int = None) -> list[dict]:
+    def process(
+        self,
+        frame_bytes: bytes,
+        num_chairs: int = 1,
+        pinned_chair: int = None,
+        session_id: int = None,
+    ) -> dict:
         if not self._initialized:
-            return []
+            return {"gestures": [], "persons": []}
+
         try:
             arr   = np.frombuffer(frame_bytes, dtype=np.uint8)
             frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             if frame is None:
-                return []
+                return {"gestures": [], "persons": []}
+            frame_h, frame_w = frame.shape[:2]
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         except Exception as e:
             print(f"[ClassSense] Frame decode error: {e}")
-            return []
+            return {"gestures": [], "persons": []}
 
-        found: list[dict] = []
+        persons: list[dict] = []
 
-        if self.image_model is not None:
+        if self.pose_model is not None and self._pose_lm is not None:
+            try:
+                import mediapipe as mp
+                mp_img      = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                pose_result = self._pose_lm.detect(mp_img)
+
+                if pose_result and pose_result.pose_landmarks:
+                    all_lm_lists = pose_result.pose_landmarks
+
+                    detected_persons = []
+                    for lm_list in all_lm_lists:
+                        nose_x = lm_list[0].x if lm_list else 0.5
+                        detected_persons.append((nose_x, lm_list))
+
+                    detected_persons.sort(key=lambda p: p[0])
+
+                    for person_idx, (nose_x, lm_list) in enumerate(detected_persons):
+                        if pinned_chair is not None:
+                            chair = pinned_chair
+                        else:
+                            chair = get_chair_from_x(nose_x, num_chairs)
+
+                        keypoints = []
+                        for point in lm_list:
+                            keypoints.extend([point.x, point.y, point.z, point.visibility])
+
+                        kp       = np.array(keypoints, dtype=np.float32)
+                        expected = self.pose_model.input_shape[-1]
+                        if len(kp) >= expected:
+                            kp = kp[:expected]
+                        else:
+                            kp = np.pad(kp, (0, expected - len(kp)))
+
+                        preds    = self.pose_model.predict(np.expand_dims(kp, 0), verbose=0)[0]
+                        sorted_i = np.argsort(preds)[::-1]
+                        best_idx = int(sorted_i[0])
+                        sec_idx  = int(sorted_i[1])
+                        conf     = float(preds[best_idx])
+                        gap      = conf - float(preds[sec_idx])
+                        raw_label = POSE_LABELS[best_idx] if best_idx < len(POSE_LABELS) else "none"
+
+                        print(f"[ClassSense] Person {person_idx+1} chair={chair} pose={raw_label} conf={conf:.3f} gap={gap:.3f}")
+
+                        gesture_display = None
+                        if (
+                            conf >= self.confidence_threshold
+                            and gap >= MIN_CONFIDENCE_GAP
+                            and raw_label != "none"
+                        ):
+                            display = LABEL_DISPLAY.get(raw_label, raw_label)
+                            if display != "none":
+                                smoothed = smooth_gesture(session_id, chair, display)
+                                if smoothed:
+                                    gesture_display = smoothed
+
+                        bbox      = _compute_bounding_box(lm_list, frame_w, frame_h)
+                        landmarks = _extract_landmarks_for_frontend(lm_list)
+
+                        already_chair = any(p["chair_rank"] == chair for p in persons)
+                        if not already_chair:
+                            persons.append({
+                                "chair_rank": chair,
+                                "nose_x":     round(nose_x, 4),
+                                "gesture":    gesture_display,
+                                "confidence": round(conf * 100, 1) if gesture_display else None,
+                                "bbox":       bbox,
+                                "landmarks":  landmarks,
+                            })
+
+                else:
+                    print("[ClassSense] Pose: no landmarks detected")
+
+            except Exception as e:
+                print(f"[ClassSense] Pose predict error: {e}")
+
+        if self.image_model is not None and len(persons) <= 1:
             try:
                 img = cv2.resize(frame, (224, 224))
                 img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -330,65 +439,45 @@ class GestureEngine:
                 gap      = conf - float(preds[sec_idx])
                 raw_label = IMAGE_LABELS[best_idx] if best_idx < len(IMAGE_LABELS) else "none"
                 print(f"[ClassSense] Image: {raw_label} conf={conf:.3f} gap={gap:.3f}")
-                if conf >= self.confidence_threshold and gap >= MIN_CONFIDENCE_GAP and raw_label != "none":
+
+                if (
+                    conf >= self.confidence_threshold
+                    and gap >= MIN_CONFIDENCE_GAP
+                    and raw_label != "none"
+                ):
                     display = LABEL_DISPLAY.get(raw_label, raw_label)
-                    if display != "none":
-                        found.append({"gesture": display, "confidence": conf, "source": "image", "x_normalized": 0.5})
+                    if display and display != "none":
+                        if persons:
+                            if persons[0]["gesture"] is None:
+                                smoothed = smooth_gesture(session_id, persons[0]["chair_rank"], display)
+                                if smoothed:
+                                    persons[0]["gesture"]    = smoothed
+                                    persons[0]["confidence"] = round(conf * 100, 1)
+                        else:
+                            chair = pinned_chair if pinned_chair is not None else get_chair_from_x(0.5, num_chairs)
+                            smoothed = smooth_gesture(session_id, chair, display)
+                            if smoothed:
+                                persons.append({
+                                    "chair_rank": chair,
+                                    "nose_x":     0.5,
+                                    "gesture":    smoothed,
+                                    "confidence": round(conf * 100, 1),
+                                    "bbox":       None,
+                                    "landmarks":  [],
+                                })
             except Exception as e:
                 print(f"[ClassSense] Image predict error: {e}")
 
-        if self.pose_model is not None and self._pose_lm is not None:
-            try:
-                import mediapipe as mp
-                mp_img      = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-                pose_result = self._pose_lm.detect(mp_img)
-                if pose_result and pose_result.pose_landmarks:
-                    lm = pose_result.pose_landmarks[0]
-                    keypoints = []
-                    for point in lm:
-                        keypoints.extend([point.x, point.y, point.z, point.visibility])
+        gestures = []
+        for p in persons:
+            if p["gesture"] is not None:
+                gestures.append({
+                    "gesture":    p["gesture"],
+                    "confidence": p["confidence"],
+                    "chair_rank": p["chair_rank"],
+                })
 
-                    nose_x = lm[0].x if lm else 0.5
-
-                    kp       = np.array(keypoints, dtype=np.float32)
-                    expected = self.pose_model.input_shape[-1]
-                    kp = kp[:expected] if len(kp) >= expected else np.pad(kp, (0, expected - len(kp)))
-                    preds    = self.pose_model.predict(np.expand_dims(kp, 0), verbose=0)[0]
-                    sorted_i = np.argsort(preds)[::-1]
-                    best_idx = int(sorted_i[0])
-                    sec_idx  = int(sorted_i[1])
-                    conf     = float(preds[best_idx])
-                    gap      = conf - float(preds[sec_idx])
-                    raw_label = POSE_LABELS[best_idx] if best_idx < len(POSE_LABELS) else "none"
-                    print(f"[ClassSense] Pose: {raw_label} conf={conf:.3f} gap={gap:.3f}")
-                    if conf >= self.confidence_threshold and gap >= MIN_CONFIDENCE_GAP and raw_label != "none":
-                        display = LABEL_DISPLAY.get(raw_label, raw_label)
-                        if display != "none":
-                            already = any(f["gesture"] == display for f in found)
-                            if not already:
-                                found.append({"gesture": display, "confidence": conf, "source": "pose", "x_normalized": nose_x})
-                else:
-                    print(f"[ClassSense] Pose: no landmarks detected")
-            except Exception as e:
-                print(f"[ClassSense] Pose predict error: {e}")
-
-        results = []
-        for item in found:
-            gesture    = item["gesture"]
-            conf       = item["confidence"]
-            x_norm     = item.get("x_normalized", 0.5)
-
-            if pinned_chair is not None:
-                chair = pinned_chair
-            else:
-                chair = get_chair_from_x(x_norm, num_chairs)
-
-            smooth_key = f"{session_id}_{chair}_{gesture}"
-            smoothed   = smooth_gesture(smooth_key, gesture)
-            if smoothed:
-                results.append({"gesture": gesture, "confidence": conf, "chair_rank": chair})
-
-        return results
+        return {"gestures": gestures, "persons": persons}
 
     def release(self):
         try:

@@ -94,14 +94,44 @@ export const useWebSocket = (url, options = {}) => {
   return { isConnected, lastMessage, error, send, connect, disconnect };
 };
 
-export const useGestureStream = (sessionId, numSeats = 20) => {
+export const useGestureStream = (sessionId, numSeats = 20, onGestureSave) => {
   const [gestures, setGestures] = useState([]);
   const [stats, setStats] = useState({});
+  const [persons, setPersons] = useState([]);
   const sendRef = useRef(null);
+  const pendingGesturesRef = useRef([]);
+  const sessionIdRef = useRef(sessionId);
+
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 
   const wsUrl = sessionId
     ? `ws://localhost:8000/ws/gesture/${sessionId}/`
     : `ws://localhost:8000/ws/gesture/0/`;
+
+  const saveGestureViaHttp = useCallback(async (gestureData) => {
+    const currentSessionId = sessionIdRef.current;
+    if (!currentSessionId || currentSessionId === 0) return false;
+    try {
+      const response = await fetch('http://localhost:8000/api/gestures/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: currentSessionId,
+          chair_rank: gestureData.chair_rank || 1,
+          gesture: gestureData.gesture,
+          confidence: gestureData.confidence || 0
+        })
+      });
+      if (response.ok) {
+        const savedGesture = await response.json();
+        return { ...gestureData, log_id: savedGesture.id };
+      }
+      return false;
+    } catch (err) {
+      console.error('HTTP gesture save failed:', err);
+      return false;
+    }
+  }, []);
 
   const { isConnected, lastMessage, send } = useWebSocket(wsUrl, {
     autoConnect: true,
@@ -113,15 +143,38 @@ export const useGestureStream = (sessionId, numSeats = 20) => {
           session_id: sessionId || 0,
         });
       }
+      while (pendingGesturesRef.current.length > 0) {
+        const pending = pendingGesturesRef.current.shift();
+        sendRef.current(pending);
+      }
     },
-    onMessage: (data) => {
+    onMessage: async (data) => {
+      if (data.type === "landmarks_update") {
+        if (Array.isArray(data.persons)) {
+          setPersons(data.persons);
+        }
+        return;
+      }
+
       if (data.type === "gesture_detected") {
-        const gestureData = data.gestures?.[0] || data.data || data;
-        setGestures((prev) => [gestureData, ...prev.slice(0, 49)]);
-        setStats((prev) => ({
-          ...prev,
-          [gestureData.gesture]: (prev[gestureData.gesture] || 0) + 1,
-        }));
+        const gestureList = Array.isArray(data.gestures) ? data.gestures : [data.data || data];
+        for (const gestureData of gestureList) {
+          if (!gestureData || !gestureData.gesture) continue;
+          if (!gestureData.log_id && sessionIdRef.current && sessionIdRef.current !== 0) {
+            const savedData = await saveGestureViaHttp(gestureData);
+            if (savedData) {
+              gestureData.log_id = savedData.log_id;
+            }
+          }
+          setGestures((prev) => [gestureData, ...prev.slice(0, 49)]);
+          setStats((prev) => ({
+            ...prev,
+            [gestureData.gesture]: (prev[gestureData.gesture] || 0) + 1,
+          }));
+          if (onGestureSave && gestureData.log_id) {
+            onGestureSave(gestureData);
+          }
+        }
       }
     },
   });
@@ -132,18 +185,30 @@ export const useGestureStream = (sessionId, numSeats = 20) => {
 
   const sendFrame = useCallback(
     (imageData) => {
-      send({
+      const msg = {
         type: "frame",
         session_id: sessionId || 0,
         frame: imageData,
-      });
+      };
+      if (!isConnected && sessionId && sessionId !== 0) {
+        pendingGesturesRef.current.push(msg);
+      }
+      send(msg);
     },
-    [send, sessionId]
+    [send, sessionId, isConnected]
   );
 
   const sendMessage = useCallback((msg) => { send(msg); }, [send]);
 
-  return { gestures, stats, isConnected, sendFrame, sendMessage, lastMessage };
+  const flushPending = useCallback(() => {
+    if (isConnected) {
+      while (pendingGesturesRef.current.length > 0) {
+        send(pendingGesturesRef.current.shift());
+      }
+    }
+  }, [isConnected, send]);
+
+  return { gestures, stats, persons, isConnected, sendFrame, sendMessage, lastMessage, flushPending };
 };
 
 export default useWebSocket;
